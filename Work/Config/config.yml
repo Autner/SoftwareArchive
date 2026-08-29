@@ -1,0 +1,24 @@
+# SoftwareArchive 全局配置
+# 修改后重新启动管理脚本即可生效。
+
+library_path: ../../Library
+
+# Work/Temp 中普通临时目录的保留天数；未完成任务始终跳过自动清理。
+temp_retention_days: 30
+
+default_platforms:
+  - Windows
+  - macOS
+  - Linux
+  - Android
+  - iOS
+
+release_check:
+  prerelease: false
+  draft: false
+
+checksum:
+  algorithm: SHA256
+
+ui:
+  language: zh-CN

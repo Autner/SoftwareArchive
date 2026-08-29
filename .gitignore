@@ -1,0 +1,24 @@
+# ---- 本机私有数据（绝不发布） ----
+# 收录的软件条目（安装包/手册/info.yml 属于本机档案）
+Library/*
+!Library/资源库管理说明.md
+
+# 生成的索引
+Library/资源索引.xlsx
+
+# 下载缓存、git 镜像与临时目录
+Work/Repositories/
+Work/Downloads/
+Work/Temp/
+
+# 导出/生成的索引数据
+outputs/
+
+# 打包产物
+packaging/output/
+*.dmg
+
+# 杂项
+.DS_Store
+*.bak-*
+nohup.out

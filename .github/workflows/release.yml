@@ -1,0 +1,34 @@
+name: Release
+
+# 推送 v* tag 时：构建自包含 macOS 应用与 DMG，并发布到 GitHub Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build app & DMG
+        run: bash packaging/build-macos-app.sh
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          shopt -s nullglob
+          files=(packaging/output/*.dmg)
+          if [ ${#files[@]} -eq 0 ]; then echo "未找到 DMG 产物"; exit 1; fi
+          printf '待发布文件:\n%s\n' "${files[@]}"
+          gh release create "$TAG" "${files[@]}" \
+            --title "$TAG" \
+            --notes "macOS 安装包：下载 DMG → 打开 → 把「软件档案管理.app」拖入「应用程序」文件夹。
+          首次打开若提示无法验证开发者：右键应用 →「打开」。
+          也可直接下载源码运行：git clone 后执行 bash Work/Scripts/Init.sh" \
+            || gh release upload "$TAG" "${files[@]}" --clobber

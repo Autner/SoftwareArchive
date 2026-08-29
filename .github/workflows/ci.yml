@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Syntax check all scripts
+        run: |
+          bash -n Work/Scripts/SoftwareArchive.sh
+          bash -n Work/Scripts/SoftwareArchiveCore.sh
+          bash -n Work/Scripts/Init.sh
+          bash -n 启动软件档案管理.command
+          bash -n packaging/build-macos-app.sh
+
+      - name: Package smoke test (build app + dmg)
+        run: bash packaging/build-macos-app.sh
