@@ -3,7 +3,10 @@
 # 由 SoftwareArchive.sh 在启动时 source，请勿单独执行。
 # 兼容 macOS 自带的 bash 3.2。
 
-SA_VERSION='1.0.8'
+# 版本号单一来源：VERSION.txt（其他地方一律从这里读取，不要手写版本数字）
+SA_VERSION=$(sed -n 's/^SoftwareArchive \([0-9][0-9.]*\).*/\1/p' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/VERSION.txt" 2>/dev/null | head -1)
+[ -n "$SA_VERSION" ] || SA_VERSION='0.0.0'
 
 # ---------- 环境 ----------
 
@@ -187,6 +190,38 @@ sa_init_environment() {
     return 0
 }
 
+# ---------- 并发锁（mkdir 原子操作；属主进程不存在时自动回收陈旧锁） ----------
+
+sa_lock_acquire() { # 提示用途 → 0 成功 / 1 已被占用
+    local label=${1:-'另一个 SoftwareArchive 实例'}
+    local lock="$CONFIG_DIR/.sa-lock"
+    mkdir -p "$CONFIG_DIR" 2>/dev/null
+    if mkdir "$lock" 2>/dev/null; then
+        printf '%s\n' $$ > "$lock/pid" 2>/dev/null
+        SA_LOCK_DIR=$lock
+        return 0
+    fi
+    local pid
+    pid=$(cat "$lock/pid" 2>/dev/null)
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+        # 持锁进程已退出，回收陈旧锁后重试一次
+        rm -rf "$lock"
+        if mkdir "$lock" 2>/dev/null; then
+            printf '%s\n' $$ > "$lock/pid" 2>/dev/null
+            SA_LOCK_DIR=$lock
+            return 0
+        fi
+    fi
+    sa_set_error "${label}正在运行（PID ${pid:-未知}），为避免档案数据冲突，本次不执行写操作。"
+    return 1
+}
+
+sa_lock_release() {
+    [ -n "${SA_LOCK_DIR:-}" ] || return 0
+    rm -rf "$SA_LOCK_DIR"
+    SA_LOCK_DIR=''
+}
+
 # ---------- YAML（info.yml 子集） ----------
 
 yaml_quote() {
@@ -217,6 +252,7 @@ read_info_yaml() { # path → 0 成功 / 1 失败
     [ -f "$path" ] || { sa_set_error "找不到 info.yml：$path"; return 1; }
     INFO_NAME=''; INFO_POLICY=''; INFO_VERSION=''; INFO_SOURCE_URL=''
     INFO_SOURCE_TYPE=''; INFO_LICENSE=''; INFO_LASTCHECKED=''; INFO_NOTES=''
+    INFO_STATUS='active'
     INFO_PLATFORMS=(); INFO_TAGS=()
     INFO_PATH=$path
     INFO_DIR=$(dirname "$path")
@@ -247,6 +283,7 @@ read_info_yaml() { # path → 0 成功 / 1 失败
                 source_url) INFO_SOURCE_URL=$(yaml_unquote "$val") ;;
                 source_type) INFO_SOURCE_TYPE=$(yaml_unquote "$val") ;;
                 license) INFO_LICENSE=$(yaml_unquote "$val") ;;
+                status) INFO_STATUS=$(yaml_unquote "$val") ;;
                 last_checked) INFO_LASTCHECKED=$(yaml_unquote "$val") ;;
                 notes) INFO_NOTES=$(yaml_unquote "$val") ;;
                 platforms)
@@ -282,6 +319,7 @@ write_info_yaml() { # path（内容取自 INFO_* 全局变量）
     fi
     text+=$'\n'
     text+="license: $(yaml_quote "$INFO_LICENSE")"$'\n'$'\n'
+    text+="status: $(yaml_quote "${INFO_STATUS:-active}")"$'\n'$'\n'
     text+="last_checked: $(yaml_quote "$INFO_LASTCHECKED")"$'\n'$'\n'
     text+="notes: $(yaml_quote "$INFO_NOTES")"$'\n'
     write_file "$path" "$text"
@@ -312,6 +350,27 @@ get_software_records() {
         if read_info_yaml "${dir}info.yml" 2>/dev/null; then REC_VALID+=('1'); else REC_VALID+=('0'); fi
     done
     return 0
+}
+
+# 搜索匹配：query info_dir → 0 命中 / 1 未命中（不区分大小写；命中名称/备注/标签/状态/手册全文）
+record_matches_query() {
+    local q raw=$1 dir=$2
+    q=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+    [ -z "$q" ] && return 1
+    read_info_yaml "$dir/info.yml" >/dev/null 2>&1 || return 1
+    local m t hit=0
+    for m in "$INFO_NAME" "$INFO_NOTES" "${INFO_STATUS:-active}" "$INFO_POLICY"; do
+        if printf '%s' "$m" | tr '[:upper:]' '[:lower:]' | grep -qF "$q"; then hit=1; break; fi
+    done
+    if [ $hit -eq 0 ]; then
+        for t in "${INFO_TAGS[@]}"; do
+            if printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | grep -qF "$q"; then hit=1; break; fi
+        done
+    fi
+    if [ $hit -eq 0 ] && [ -f "$dir/使用手册.md" ]; then
+        if grep -qiF "$q" "$dir/使用手册.md" 2>/dev/null; then hit=1; fi
+    fi
+    [ $hit -eq 1 ]
 }
 
 # ---------- 名称与 URL 校验 ----------
@@ -1060,6 +1119,58 @@ new_sa_index_workbook() {
     }
     rm -rf "$build"
     mv -f "$outtmp" "$INDEX_FILE"
+    return 0
+}
+
+# ---------- 资源索引.tsv（纯 bash、无 zip 依赖、机器可读） ----------
+
+INDEX_TSV_FILE=''
+
+write_index_tsv() { # → 0 成功（结果在 $INDEX_TSV_FILE / stdout 打印时由调用方重定向）
+    get_software_records
+    local line
+    printf '%s\n' "名称$(printf '\t')版本$(printf '\t')平台$(printf '\t')更新策略$(printf '\t')状态$(printf '\t')标签$(printf '\t')最后检查$(printf '\t')备注"
+    local ri tags plats
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        if [ "${REC_VALID[$ri]}" = '1' ]; then
+            read_info_yaml "${REC_DIRS[$ri]}/info.yml" >/dev/null 2>&1
+            tags=''; plats=''
+            [ ${#INFO_TAGS[@]}      -gt 0 ] && tags=$(IFS='/'; echo "${INFO_TAGS[*]}")
+            [ ${#INFO_PLATFORMS[@]} -gt 0 ] && plats=$(IFS='/'; echo "${INFO_PLATFORMS[*]}")
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$INFO_NAME" "$INFO_VERSION" "$plats" "$INFO_POLICY" \
+                "${INFO_STATUS:-active}" "$tags" "$INFO_LASTCHECKED" "$INFO_NOTES"
+        fi
+    done
+    return 0
+}
+
+rebuild_index_tsv() { # 写入 $LIBRARY_DIR/资源索引.tsv
+    INDEX_TSV_FILE="$LIBRARY_DIR/资源索引.tsv"
+    write_index_tsv > "$INDEX_TSV_FILE" || { sa_set_error '生成 资源索引.tsv 失败。'; return 1; }
+    return 0
+}
+
+# ---------- 源码 bundle 校验 ----------
+
+# 结果：BV_COUNT BV_OK BV_MESSAGE
+verify_sa_bundles() { # software_path
+    BV_COUNT=0; BV_OK=0; BV_MESSAGE=''
+    local p=$1 f out
+    [ -d "$p/Source" ] || return 0
+    for f in "$p/Source/"*.bundle; do
+        [ -f "$f" ] || continue
+        BV_COUNT=$((BV_COUNT + 1))
+        out=$(git bundle verify "$f" 2>&1)
+        if [ $? -eq 0 ]; then BV_OK=$((BV_OK + 1)); fi
+    done
+    if [ "$BV_COUNT" -eq 0 ]; then
+        BV_MESSAGE='无 bundle'
+    elif [ "$BV_OK" = "$BV_COUNT" ]; then
+        BV_MESSAGE="bundle 校验通过（$BV_COUNT 个）"
+    else
+        BV_MESSAGE="bundle 校验失败（$BV_OK/$BV_COUNT 个通过）"
+    fi
     return 0
 }
 

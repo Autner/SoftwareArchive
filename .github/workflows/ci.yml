@@ -16,8 +16,12 @@ jobs:
           bash -n Work/Scripts/SoftwareArchive.sh
           bash -n Work/Scripts/SoftwareArchiveCore.sh
           bash -n Work/Scripts/Init.sh
+          bash -n Work/Tests/run-tests.sh
           bash -n 启动软件档案管理.command
           bash -n packaging/build-macos-app.sh
+
+      - name: Unit tests
+        run: bash Work/Tests/run-tests.sh
 
       - name: Package smoke test (build app + dmg)
         run: bash packaging/build-macos-app.sh

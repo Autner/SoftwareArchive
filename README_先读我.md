@@ -1,6 +1,6 @@
 # SoftwareArchive 快速开始（macOS 版）
 
-当前版本：`1.0.8`
+当前版本：见 [VERSION.txt](VERSION.txt) 与 [CHANGELOG.md](CHANGELOG.md)
 
 ## 第一次使用
 

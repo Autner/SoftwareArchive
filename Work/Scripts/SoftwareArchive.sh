@@ -15,7 +15,7 @@ elif [ -n "${1:-}" ]; then
     ACTION=$1
 fi
 case $ACTION in
-    Menu|Init|RebuildIndex|Verify) : ;;
+    Menu|Init|RebuildIndex|Verify|List) : ;;
     *) ACTION='Menu' ;;
 esac
 
@@ -1399,6 +1399,11 @@ start_verify_resources() {
         done
         if [ "$CK_PASSED" = '1' ]; then color=$GREEN; else color=$RED; allpass=0; fi
         printf '%s\n' "${color}  $CK_MESSAGE${NONE}"
+        verify_sa_bundles "${REC_DIRS[$r]}"
+        if [ "$BV_COUNT" -gt 0 ]; then
+            if [ "$BV_OK" = "$BV_COUNT" ]; then color=$GREEN; else color=$RED; allpass=0; fi
+            printf '%s\n' "${color}  $BV_MESSAGE${NONE}"
+        fi
         printf '\n'
     done
     if [ "$allpass" = '1' ]; then color=$GREEN; msg='全部校验通过。'; else color=$RED; msg='校验发现问题，请检查红色项目。'; fi
@@ -1408,10 +1413,11 @@ start_verify_resources() {
 
 start_rebuild_index() {
     show_header '重建资源索引' '正在扫描 Library/*/info.yml。'
+    rebuild_index_tsv
     if new_sa_index_workbook; then
-        show_header '资源索引已重建' "文件：$INDEX_FILE"
+        show_header '资源索引已重建' "TSV：$INDEX_TSV_FILE" "XLSX：$INDEX_FILE"
     else
-        show_header '重建失败' "$SA_ERROR_MSG"
+        show_header '资源索引已重建（XLSX 跳过）' "TSV：$INDEX_TSV_FILE" "$SA_ERROR_MSG"
     fi
     wait_for_user
 }
@@ -1647,28 +1653,331 @@ open_library() {
     }
 }
 
+# ---------- 搜索档案 ----------
+
+start_search_archive() {
+    get_software_records
+    if [ ${#REC_NAMES[@]} -eq 0 ]; then
+        show_header '搜索档案' '资源库中还没有软件。'
+        wait_for_user
+        return 0
+    fi
+    local -a lines=('输入关键字，将匹配：名称、备注、标签、状态、使用手册全文（不区分大小写）。')
+    RV_TITLE='搜索档案'
+    RV_PROMPT='关键字'
+    RV_EXAMPLE=''
+    RV_DEFAULT=''
+    RV_ALLOW_EMPTY=''
+    RV_VALIDATOR=''
+    RV_HELP=("${lines[@]}")
+    read_value
+    if [ -n "$RV_CANCELLED" ]; then return 0; fi
+    local q=$RV_VALUE ri
+    local -a hits=() hit_idx=()
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        if record_matches_query "$q" "${REC_DIRS[$ri]}"; then
+            hits+=("${REC_NAMES[$ri]}（${INFO_VERSION:-未记录版本}）— ${INFO_NOTES:-无备注}")
+            hit_idx+=("$ri")
+        fi
+    done
+    if [ ${#hits[@]} -eq 0 ]; then
+        show_header '搜索档案' "没有匹配“$q”的软件。"
+        wait_for_user
+        return 0
+    fi
+    SELECT_TITLE="搜索结果：$q"
+    SELECT_OPTIONS=("${hits[@]}")
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=('选择一项查看详情；Esc 返回。')
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] && return 0
+    local sel=${hit_idx[$SELECT_RESULT]}
+    read_info_yaml "${REC_DIRS[$sel]}/info.yml" >/dev/null 2>&1
+    local plats tags
+    plats=$(IFS='/'; echo "${INFO_PLATFORMS[*]}")
+    tags=$(IFS='/'; echo "${INFO_TAGS[*]}")
+    show_header "详情：$INFO_NAME" \
+        "版本：${INFO_VERSION:-未记录}    平台：${plats:-无}    状态：${INFO_STATUS:-active}" \
+        "策略：$INFO_POLICY    标签：${tags:-无}    最近检查：${INFO_LASTCHECKED:-从未}" \
+        "来源：${INFO_SOURCE_URL:-无}" \
+        "备注：${INFO_NOTES:-无}" \
+        "目录：${REC_DIRS[$sel]}" \
+        "手册：$([ -f "${REC_DIRS[$sel]}/使用手册.md" ] && printf '已存在' || printf '缺失')"
+    wait_for_user
+}
+
+# ---------- 批量检查全部更新 ----------
+
+start_check_all_updates() {
+    get_software_records
+    if [ ${#REC_NAMES[@]} -eq 0 ]; then
+        show_header '检查全部更新' '资源库中还没有软件。'
+        wait_for_user
+        return 0
+    fi
+    if ! sa_lock_acquire '检查全部更新：'; then
+        show_header '无法开始' "$SA_ERROR_MSG"
+        wait_for_user
+        return 0
+    fi
+    local -a upd=() same=() fail=() idx_upd=()
+    local ri rc cur latest
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        read_info_yaml "${REC_DIRS[$ri]}/info.yml" >/dev/null 2>&1
+        [ "$INFO_POLICY" = 'Maintain' ] || continue
+        [ "${INFO_STATUS:-active}" = 'active' ] || continue
+        show_header '检查全部更新' "正在查询（$((ri + 1))/${#REC_NAMES[@]}）：$INFO_SOURCE_URL"
+        get_latest_release "$INFO_SOURCE_URL"
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            fail+=("${REC_NAMES[$ri]}：查询失败")
+            continue
+        fi
+        cur=${INFO_VERSION:-未记录}
+        latest=${RELEASE_TAG:-未知}
+        if [ "$latest" = "$cur" ]; then
+            same+=("${REC_NAMES[$ri]}：已是最新（$cur）")
+        else
+            upd+=("${REC_NAMES[$ri]}：$cur → $latest")
+            idx_upd+=("$ri")
+        fi
+    done
+    sa_lock_release
+    local -a summary=()
+    [ ${#upd[@]}  -gt 0 ] && summary+=("有新版本 ${#upd[@]} 个：")
+    [ ${#same[@]} -gt 0 ] && summary+=("已最新 ${#same[@]} 个")
+    [ ${#fail[@]} -gt 0 ] && summary+=("查询失败 ${#fail[@]} 个")
+    [ ${#summary[@]} -eq 0 ] && summary+=('没有策略为 Maintain 且状态为 active 的软件。')
+    SELECT_TITLE='检查全部更新：结果'
+    local -a opts=()
+    [ ${#upd[@]} -gt 0 ] && opts+=('进入某个软件的更新向导')
+    opts+=('仅查看明细' '返回')
+    SELECT_OPTIONS=("${opts[@]}")
+    SELECT_DEFAULT_INDEX=0
+    local detail=''
+    local l
+    for l in "${upd[@]+"${upd[@]}"}"; do detail+="$l"$'\n'; done
+    for l in "${same[@]+"${same[@]}"}"; do detail+="$l"$'\n'; done
+    for l in "${fail[@]+"${fail[@]}"}"; do detail+="$l"$'\n'; done
+    SELECT_HELP=("${summary[@]}" "$detail")
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    local pick=$SELECT_RESULT
+    [ "$pick" -lt 0 ] && return 0
+    if [ ${#upd[@]} -gt 0 ] && [ "$pick" = '0' ]; then
+        SELECT_TITLE='选择要更新的软件'
+        SELECT_OPTIONS=("${upd[@]}")
+        SELECT_DEFAULT_INDEX=0
+        SELECT_HELP=('选择后进入该软件的更新向导。')
+        SELECT_ALLOW_CANCEL=1
+        select_one
+        [ "$SELECT_RESULT" -lt 0 ] && return 0
+        start_maintain_update "${idx_upd[$SELECT_RESULT]}"
+    fi
+    return 0
+}
+
+# ---------- 标记软件状态 ----------
+
+start_mark_status() {
+    get_software_records
+    if [ ${#REC_NAMES[@]} -eq 0 ]; then
+        show_header '标记软件状态' '资源库中还没有软件。'
+        wait_for_user
+        return 0
+    fi
+    local -a opts=()
+    local ri
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        read_info_yaml "${REC_DIRS[$ri]}/info.yml" >/dev/null 2>&1
+        opts+=("${REC_NAMES[$ri]}（当前：${INFO_STATUS:-active}）")
+    done
+    SELECT_TITLE='标记软件状态'
+    SELECT_OPTIONS=("${opts[@]}")
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=('适用于 Fixed 软件失效/迁移等情况；active 软件才会参与更新检查。')
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] && return 0
+    local sel=$SELECT_RESULT
+    read_info_yaml "${REC_DIRS[$sel]}/info.yml" >/dev/null 2>&1
+    SELECT_TITLE="标记状态：$INFO_NAME"
+    SELECT_OPTIONS=('active：正常使用' 'deprecated：已失效/停止维护' 'migrated：已迁移到其他软件' '返回')
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=()
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] || [ "$SELECT_RESULT" -ge 3 ] && return 0
+    local st=('active' 'deprecated' 'migrated')
+    INFO_STATUS=${st[$SELECT_RESULT]}
+    write_info_yaml "$INFO_PATH"
+    rebuild_index_tsv >/dev/null 2>&1
+    show_header '标记软件状态' "已将 $INFO_NAME 标记为 $INFO_STATUS。"
+    wait_for_user
+}
+
+# ---------- Maintain（源码镜像维护） ----------
+
+start_maintain_menu() {
+    get_software_records
+    if [ ${#REC_NAMES[@]} -eq 0 ]; then
+        show_header '维护源码镜像' '资源库中还没有软件。'
+        wait_for_user
+        return 0
+    fi
+    local -a opts=() idx=()
+    local ri
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        read_info_yaml "${REC_DIRS[$ri]}/info.yml" >/dev/null 2>&1
+        if [ "$INFO_POLICY" = 'Maintain' ]; then
+            opts+=("${REC_NAMES[$ri]}（${INFO_VERSION:-未记录}）")
+            idx+=("$ri")
+        fi
+    done
+    if [ ${#opts[@]} -eq 0 ]; then
+        show_header '维护源码镜像' '没有策略为 Maintain 的软件。'
+        wait_for_user
+        return 0
+    fi
+    SELECT_TITLE='维护源码镜像 (Maintain)'
+    SELECT_OPTIONS=("${opts[@]}")
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=('更新该软件的 Git mirror 与 .bundle 源码备份。')
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] && return 0
+    start_maintain_update "${idx[$SELECT_RESULT]}"
+}
+
+# ---------- 导出 / 导入软件条目 ----------
+
+start_export_entry() {
+    get_software_records
+    if [ ${#REC_NAMES[@]} -eq 0 ]; then
+        show_header '导出软件条目' '资源库中还没有软件。'
+        wait_for_user
+        return 0
+    fi
+    local -a opts=()
+    local ri
+    for ((ri = 0; ri < ${#REC_NAMES[@]}; ri++)); do
+        opts+=("${REC_NAMES[$ri]}（${REC_DIRS[$ri]##*/}）")
+    done
+    SELECT_TITLE='导出软件条目'
+    SELECT_OPTIONS=("${opts[@]}")
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=('导出为可分享的 zip；对方可通过「导入软件条目」直接入库。')
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] && return 0
+    local sel=$SELECT_RESULT
+    local name=${REC_NAMES[$sel]}
+    read_info_yaml "${REC_DIRS[$sel]}/info.yml" >/dev/null 2>&1
+    SELECT_TITLE='导出内容'
+    SELECT_OPTIONS=('完整（安装包 + 手册 + 信息；不含源码镜像）' '仅信息与使用手册' '返回')
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=()
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] || [ "$SELECT_RESULT" -ge 2 ] && return 0
+    local mode=$SELECT_RESULT
+    local dest="$HOME/Desktop/${name}-$(safe_path_segment "${INFO_VERSION:-unknown}").saentry.zip"
+    rm -f "$dest"
+    if [ "$mode" = '0' ]; then
+        (cd "$LIBRARY_DIR" && zip -q -r "$dest" "$name" -x "$name/Source/*") || {
+            show_header '导出失败' 'zip 打包出错。' ; wait_for_user; return 0;
+        }
+    else
+        (cd "$LIBRARY_DIR" && zip -q -r "$dest" "$name" -i "$name/info.yml" "$name/使用手册.md" "$name/checksums.sha256") || {
+            show_header '导出失败' 'zip 打包出错。' ; wait_for_user; return 0;
+        }
+    fi
+    show_header '导出完成' "文件：$dest" '可直接发送给他人；对方在主菜单选择「导入软件条目」。'
+    wait_for_user
+}
+
+start_import_entry() {
+    select_local_files '选择要导入的 .saentry.zip'
+    if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then return 0; fi
+    local src=${FILES[0]}
+    local stage="$TEMP_DIR/import_$(date +%s)"
+    rm -rf "$stage"; mkdir -p "$stage"
+    if ! unzip -q "$src" -d "$stage" 2>/dev/null; then
+        rm -rf "$stage"
+        show_header '导入失败' '无法解压该文件，请确认是 .saentry.zip。'
+        wait_for_user
+        return 0
+    fi
+    local info=$(find "$stage" -maxdepth 3 -name info.yml -print 2>/dev/null | head -1)
+    if [ -z "$info" ]; then
+        rm -rf "$stage"
+        show_header '导入失败' '压缩包中没有找到 info.yml。'
+        wait_for_user
+        return 0
+    fi
+    if ! read_info_yaml "$info"; then
+        rm -rf "$stage"
+        show_header '导入失败' "$SA_ERROR_MSG"
+        wait_for_user
+        return 0
+    fi
+    local name=$INFO_NAME
+    local target="$LIBRARY_DIR/$(safe_path_segment "$name")"
+    if [ -e "$target" ]; then
+        rm -rf "$stage"
+        show_header '导入失败' "已存在同名软件：$name" '如需覆盖请先删除原有条目。'
+        wait_for_user
+        return 0
+    fi
+    mkdir -p "$LIBRARY_DIR"
+    mv "$(dirname "$info")" "$target"
+    rm -rf "$stage"
+    if [ ! -f "$target/使用手册.md" ]; then
+        new_user_manual "$target/使用手册.md" "$name" "${INFO_VERSION:-}" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}
+    fi
+    rebuild_index_tsv >/dev/null 2>&1
+    new_sa_index_workbook >/dev/null 2>&1
+    show_header '导入完成' "$name 已加入档案库（版本 ${INFO_VERSION:-未记录}）。" '如使用手册仍是模板，请补写后回到“更新已有软件”确认完成。'
+    wait_for_user
+}
+
 start_main_menu() {
+    if ! sa_lock_acquire; then
+        show_header '无法启动' "$SA_ERROR_MSG" '关闭另一个正在运行的实例后重试。'
+        wait_for_user
+        return 0
+    fi
+    trap 'sa_lock_release' EXIT
     invoke_recovery_prompt
-    local choice records_count maintain_count pending_count i
+    local choice records_count maintain_count pending_count deprecated_count i
     local -a options
     while :; do
         get_software_records
         records_count=${#REC_NAMES[@]}
         pending_count=${#TASKS_IDS[@]}
         maintain_count=0
+        deprecated_count=0
         for ((i = 0; i < records_count; i++)); do
             if [ "${REC_VALID[$i]}" = '1' ]; then
                 read_info_yaml "${REC_DIRS[$i]}/info.yml" >/dev/null 2>&1
                 [ "$INFO_POLICY" = 'Maintain' ] && maintain_count=$((maintain_count + 1))
+                [ "${INFO_STATUS:-active}" != 'active' ] && deprecated_count=$((deprecated_count + 1))
             fi
         done
         options=('收录新软件'
                  '更新已有软件'
+                 '检查全部更新'
                  "处理未完成任务 [$pending_count]"
+                 '搜索档案'
                  '修改更新策略'
+                 '标记软件状态'
                  '删除已有软件'
+                 '维护源码镜像 (Maintain)'
+                 '导出软件条目'
+                 '导入软件条目'
                  '校验资源完整性'
-                 '重建 资源索引.xlsx'
+                 '重建 资源索引'
                  '清理过期临时目录'
                  '打开 Library 目录'
                  '重新初始化工作环境'
@@ -1676,7 +1985,7 @@ start_main_menu() {
         SELECT_TITLE="SoftwareArchive $SA_VERSION 软件档案管理"
         SELECT_OPTIONS=("${options[@]}")
         SELECT_DEFAULT_INDEX=0
-        SELECT_HELP=("已收录：$records_count 个；Maintain：$maintain_count 个；未完成任务：$pending_count 个"
+        SELECT_HELP=("已收录：$records_count 个；Maintain：$maintain_count 个；失效/迁移：$deprecated_count 个；未完成任务：$pending_count 个"
                      '方向键选择，重要操作会在提交前再次确认。')
         SELECT_ALLOW_CANCEL=''
         select_one
@@ -1684,19 +1993,25 @@ start_main_menu() {
         case $choice in
             0) guard start_new_software ;;
             1) guard start_update_software ;;
-            2) guard invoke_recovery_prompt ;;
-            3) guard start_change_policy ;;
-            4) guard start_delete_software ;;
-            5) guard start_verify_resources ;;
-            6) guard start_rebuild_index ;;
-            7) guard start_clean_temp ;;
-            8) guard open_library ;;
-            9)
+            2) guard start_check_all_updates ;;
+            3) guard invoke_recovery_prompt ;;
+            4) guard start_search_archive ;;
+            5) guard start_change_policy ;;
+            6) guard start_mark_status ;;
+            7) guard start_delete_software ;;
+            8) guard start_maintain_menu ;;
+            9) guard start_export_entry ;;
+            10) guard start_import_entry ;;
+            11) guard start_verify_resources ;;
+            12) guard start_rebuild_index ;;
+            13) guard start_clean_temp ;;
+            14) guard open_library ;;
+            15)
                 sa_init_environment
                 show_header '初始化完成' 'Repositories、Downloads、Temp、Config 和索引已经检查。'
                 wait_for_user
                 ;;
-            10) return 0 ;;
+            16) sa_lock_release; trap - EXIT; return 0 ;;
         esac
     done
 }
@@ -1706,6 +2021,7 @@ start_main_menu() {
 case $ACTION in
     Init)
         sa_init_environment
+        rebuild_index_tsv >/dev/null 2>&1
         printf '%s\n' 'SoftwareArchive 环境初始化完成。'
         if [ -n "${SA_DATA_HOME:-}" ]; then
             printf '%s\n' "代码目录：$ROOT_DIR"
@@ -1714,12 +2030,21 @@ case $ACTION in
             printf '%s\n' "根目录：$ROOT_DIR"
         fi
         ;;
+    List)
+        # 输出 TSV 清单到 stdout（机器可读；供其他工具/脚本消费）
+        write_index_tsv
+        exit 0
+        ;;
     RebuildIndex)
+        if ! rebuild_index_tsv; then
+            printf '%s\n' "$SA_ERROR_MSG" >&2
+            exit 1
+        fi
+        printf '%s\n' "资源索引已生成：$INDEX_TSV_FILE"
         if new_sa_index_workbook; then
             printf '%s\n' "资源索引已生成：$INDEX_FILE"
         else
-            printf '%s\n' "$SA_ERROR_MSG" >&2
-            exit 1
+            printf '%s\n' "提示：$SA_ERROR_MSG（TSV 索引不受影响）" >&2
         fi
         ;;
     Verify)
@@ -1727,8 +2052,10 @@ case $ACTION in
         get_software_records
         for ((i = 0; i < ${#REC_NAMES[@]}; i++)); do
             test_sa_checksums "${REC_DIRS[$i]}"
-            printf '%s\n' "${REC_NAMES[$i]}：$CK_MESSAGE"
+            verify_sa_bundles "${REC_DIRS[$i]}"
+            printf '%s\n' "${REC_NAMES[$i]}：$CK_MESSAGE（$BV_MESSAGE）"
             [ "$CK_PASSED" = '1' ] || failed=$((failed + 1))
+            [ "$BV_COUNT" -gt 0 ] && [ "$BV_OK" != "$BV_COUNT" ] && failed=$((failed + 1))
         done
         if [ "$failed" -gt 0 ]; then exit 2; fi
         exit 0
