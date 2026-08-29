@@ -22,21 +22,27 @@ jobs:
       - name: Package smoke test (build app + dmg)
         run: bash packaging/build-macos-app.sh
 
-      - name: App entry smoke test (install / upgrade / data retention)
+      - name: App entry smoke test (code-in-app, data-in-home)
         run: |
           ENTRY="packaging/output/stage/dmg/软件档案管理.app/Contents/MacOS/软件档案管理"
+          RES="packaging/output/stage/dmg/软件档案管理.app/Contents/Resources/SoftwareArchive"
           rm -rf /tmp/sa-smoke-home && mkdir -p /tmp/sa-smoke-home
-          # 1) 首次安装：应生成完整工具与数据目录
+          # 1) 首次运行：数据目录建立在家目录
           HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
-          test -x /tmp/sa-smoke-home/SoftwareArchive/Work/Scripts/SoftwareArchive.sh
-          test -f /tmp/sa-smoke-home/SoftwareArchive/Library/资源索引.xlsx
-          echo "marker" > /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
-          # 2) 同版本重复运行：不应有任何改动（数据标记仍在）
+          D=/tmp/sa-smoke-home/SoftwareArchive
+          test -f "$D/Work/Config/config.yml"
+          test -f "$D/Library/资源索引.xlsx"
+          test -d "$D/Work/Repositories"
+          # 2) 代码不进数据目录；数据缓存不进 App 包
+          test ! -e "$D/Work/Scripts"
+          test ! -d "$RES/Work/Repositories"
+          test ! -d "$RES/Work/Downloads"
+          # 3) 重复运行：数据与用户配置原样保留
+          echo "marker" > "$D/Library/数据标记.txt"
+          echo "custom_setting: keep" >> "$D/Work/Config/config.yml"
           HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
-          grep -q marker /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
-          # 3) 模拟升级：把 home 版本改旧，重跑入口 → 代码应更新、数据应保留
-          sed -i '' 's/1\.0\.7/1.0.6/' /tmp/sa-smoke-home/SoftwareArchive/VERSION.txt
-          HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
-          grep -q "1\.0\.7" /tmp/sa-smoke-home/SoftwareArchive/VERSION.txt
-          grep -q marker /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
+          grep -q marker "$D/Library/数据标记.txt"
+          grep -q "custom_setting: keep" "$D/Work/Config/config.yml"
+          # 4) 分离模式下功能入口可用
+          (cd "$RES" && SA_DATA_HOME="$D" bash Work/Scripts/SoftwareArchive.sh -Action Verify)
           rm -rf /tmp/sa-smoke-home

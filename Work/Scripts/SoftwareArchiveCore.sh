@@ -3,7 +3,7 @@
 # 由 SoftwareArchive.sh 在启动时 source，请勿单独执行。
 # 兼容 macOS 自带的 bash 3.2。
 
-SA_VERSION='1.0.7'
+SA_VERSION='1.0.8'
 
 # ---------- 环境 ----------
 
@@ -156,11 +156,21 @@ sa_paths_init() { # scripts_dir
     SCRIPTS_DIR=$(cd "$1" && pwd)
     WORK_DIR=$(dirname "$SCRIPTS_DIR")
     ROOT_DIR=$(dirname "$WORK_DIR")
-    CONFIG_DIR="$WORK_DIR/Config"
-    CONFIG_FILE="$CONFIG_DIR/config.yml"
-    REPOS_DIR="$WORK_DIR/Repositories"
-    DOWNLOADS_DIR="$WORK_DIR/Downloads"
-    TEMP_DIR="$WORK_DIR/Temp"
+    # 桌面应用模式：代码在 App 包内，数据目录由 SA_DATA_HOME 指定（如 ~/SoftwareArchive）。
+    # 未设置时保持原行为：代码与数据同目录（便携文件夹模式）。
+    if [ -n "${SA_DATA_HOME:-}" ] && [ -d "$SA_DATA_HOME" ]; then
+        CONFIG_DIR="$SA_DATA_HOME/Work/Config"
+        CONFIG_FILE="$CONFIG_DIR/config.yml"
+        REPOS_DIR="$SA_DATA_HOME/Work/Repositories"
+        DOWNLOADS_DIR="$SA_DATA_HOME/Work/Downloads"
+        TEMP_DIR="$SA_DATA_HOME/Work/Temp"
+    else
+        CONFIG_DIR="$WORK_DIR/Config"
+        CONFIG_FILE="$CONFIG_DIR/config.yml"
+        REPOS_DIR="$WORK_DIR/Repositories"
+        DOWNLOADS_DIR="$WORK_DIR/Downloads"
+        TEMP_DIR="$WORK_DIR/Temp"
+    fi
     sa_read_config
     LIBRARY_DIR=$(resolve_path "$CONFIG_DIR" "$LIBRARY_PATH_CFG")
     if [ "$LIBRARY_DIR" = '/' ] || [ "$LIBRARY_DIR" = "$ROOT_DIR" ]; then

@@ -1707,7 +1707,12 @@ case $ACTION in
     Init)
         sa_init_environment
         printf '%s\n' 'SoftwareArchive 环境初始化完成。'
-        printf '%s\n' "根目录：$ROOT_DIR"
+        if [ -n "${SA_DATA_HOME:-}" ]; then
+            printf '%s\n' "代码目录：$ROOT_DIR"
+            printf '%s\n' "数据目录：$SA_DATA_HOME"
+        else
+            printf '%s\n' "根目录：$ROOT_DIR"
+        fi
         ;;
     RebuildIndex)
         if new_sa_index_workbook; then

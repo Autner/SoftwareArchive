@@ -37,46 +37,29 @@ cp "$ICONSET/icon_512x512.png" "$ICONSET/icon_256x256@2x.png"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 
-# 3) 入口程序：代码装在 ~/SoftwareArchive，数据跟随代码；App 只负责安装/升级/启动
+# 3) 入口程序：代码始终运行自 App 包内；数据保存在 ~/SoftwareArchive（升级/卸载 App 均不影响数据）
 cat > "$APP/Contents/MacOS/$APPNAME" <<'EXE'
 #!/bin/bash
-# 入口：首次运行把工具安装到 ~/SoftwareArchive；
-#       之后运行时若 App 内置代码版本更新，则仅同步代码文件（绝不触碰 Library 数据）；
-#       最后在 Terminal 中打开主菜单。
+# 入口：代码在 App 包（Contents/Resources/SoftwareArchive），
+#       数据在家目录（默认 ~/SoftwareArchive，可用 SA_HOME 覆盖）。
+#       首次运行初始化数据目录；此后每次直接以 SA_DATA_HOME 运行包内代码。
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)/SoftwareArchive"
 DATA_HOME="${SA_HOME:-$HOME/SoftwareArchive}"
 if [ ! -f "$RES/Work/Scripts/SoftwareArchive.sh" ]; then
     osascript -e 'display notification "应用内部文件缺失，请重新下载安装包" with title "软件档案管理" subtitle "启动失败"'
     exit 1
 fi
-ver_of() { sed -n 's/^SoftwareArchive \([0-9][0-9.]*\).*/\1/p' "$1" 2>/dev/null | head -1; }
-# BSD sort 无 -V，用 awk 比较点分版本号
-vcmp() { awk -v a="$1" -v b="$2" 'BEGIN{split(a,x,".");split(b,y,".");for(i=1;i<=4;i++){if(x[i]+0>y[i]+0){print "gt";exit}if(x[i]+0<y[i]+0){print "lt";exit}}print "eq"}'; }
-
-if [ ! -d "$DATA_HOME/Work/Scripts" ]; then
-    # 首次安装：完整拷贝并初始化
-    mkdir -p "$DATA_HOME"
-    rsync -a "$RES/" "$DATA_HOME/"
-    (cd "$DATA_HOME" && bash Work/Scripts/SoftwareArchive.sh -Action Init) >/dev/null 2>&1
-    [ -n "$SA_SILENT" ] && exit 0
-    osascript -e 'display notification "安装完成，已放置到 ~/SoftwareArchive" with title "软件档案管理"'
-else
-    BV=$(ver_of "$RES/VERSION.txt"); HV=$(ver_of "$DATA_HOME/VERSION.txt")
-    if [ -n "$BV" ] && [ "$(vcmp "$BV" "$HV")" = "gt" ]; then
-        # 升级：仅同步代码与文档，保留 Library、Work/Config 及全部缓存数据
-        rsync -a "$RES/Work/Scripts/" "$DATA_HOME/Work/Scripts/"
-        ditto "$RES/启动软件档案管理.command" "$DATA_HOME/启动软件档案管理.command"
-        ditto "$RES/README_先读我.md" "$DATA_HOME/README_先读我.md"
-        ditto "$RES/VERSION.txt" "$DATA_HOME/VERSION.txt"
-        [ -f "$DATA_HOME/Work/Config/config.yml" ] || ditto "$RES/Work/Config/config.yml" "$DATA_HOME/Work/Config/config.yml"
-        [ -n "$SA_SILENT" ] && exit 0
-        osascript -e "display notification \"工具已升级到 v$BV（数据不受影响）\" with title \"软件档案管理\""
-    fi
+# 首次运行：落一份默认配置（此后永远保留用户配置，升级不覆盖）
+if [ ! -f "$DATA_HOME/Work/Config/config.yml" ]; then
+    mkdir -p "$DATA_HOME/Work/Config"
+    cp "$RES/Work/Config/config.yml" "$DATA_HOME/Work/Config/config.yml"
 fi
+export SA_DATA_HOME="$DATA_HOME"
+(cd "$RES" && bash Work/Scripts/SoftwareArchive.sh -Action Init) >/dev/null 2>&1
 [ -n "$SA_SILENT" ] && exit 0
 osascript \
   -e 'tell application "Terminal" to activate' \
-  -e "tell application \"Terminal\" to do script \"cd '$DATA_HOME' && bash './启动软件档案管理.command'\""
+  -e "tell application \"Terminal\" to do script \"export SA_DATA_HOME='$DATA_HOME'; cd '$RES' && bash './启动软件档案管理.command'\""
 EXE
 chmod +x "$APP/Contents/MacOS/$APPNAME"
 
@@ -116,12 +99,11 @@ cat > "$STAGE/dmg/安装说明.txt" <<'NOTE'
 软件档案管理（SoftwareArchive）
 
 安装：把「软件档案管理.app」拖入「应用程序」文件夹即完成安装。
-使用：双击应用图标。首次运行会把工具自动安装到 ~/SoftwareArchive
-     并打开管理菜单；之后双击始终打开该目录。
-数据：收录的软件档案保存在 ~/SoftwareArchive/Library，
-     与应用本体分离——将来升级 App、甚至删除重装 App 都不会影响数据。
-升级：新版本 App 首次运行时自动更新 ~/SoftwareArchive 中的代码，
-     Library 数据保持原样。也可用环境变量 SA_HOME 指定其他数据目录。
+使用：双击应用图标，首次运行自动初始化数据目录并打开管理菜单。
+结构：工具代码保存在 App 包内部；你的档案数据保存在家目录
+     ~/SoftwareArchive（Library 软件档案、Work 配置与缓存）。
+升级：直接用新版 App 覆盖旧版即可——数据在家目录，升级、卸载、
+     重装 App 均不影响数据。也可用环境变量 SA_HOME 指定其他数据目录。
 首次打开若提示无法验证开发者：右键应用 →「打开」。
 NOTE
 
