@@ -21,3 +21,22 @@ jobs:
 
       - name: Package smoke test (build app + dmg)
         run: bash packaging/build-macos-app.sh
+
+      - name: App entry smoke test (install / upgrade / data retention)
+        run: |
+          ENTRY="packaging/output/stage/dmg/软件档案管理.app/Contents/MacOS/软件档案管理"
+          rm -rf /tmp/sa-smoke-home && mkdir -p /tmp/sa-smoke-home
+          # 1) 首次安装：应生成完整工具与数据目录
+          HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
+          test -x /tmp/sa-smoke-home/SoftwareArchive/Work/Scripts/SoftwareArchive.sh
+          test -f /tmp/sa-smoke-home/SoftwareArchive/Library/资源索引.xlsx
+          echo "marker" > /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
+          # 2) 同版本重复运行：不应有任何改动（数据标记仍在）
+          HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
+          grep -q marker /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
+          # 3) 模拟升级：把 home 版本改旧，重跑入口 → 代码应更新、数据应保留
+          sed -i '' 's/1\.0\.7/1.0.6/' /tmp/sa-smoke-home/SoftwareArchive/VERSION.txt
+          HOME=/tmp/sa-smoke-home SA_SILENT=1 bash "$ENTRY"
+          grep -q "1\.0\.7" /tmp/sa-smoke-home/SoftwareArchive/VERSION.txt
+          grep -q marker /tmp/sa-smoke-home/SoftwareArchive/Library/数据标记.txt
+          rm -rf /tmp/sa-smoke-home

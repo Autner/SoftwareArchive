@@ -3,7 +3,7 @@
 # 由 SoftwareArchive.sh 在启动时 source，请勿单独执行。
 # 兼容 macOS 自带的 bash 3.2。
 
-SA_VERSION='1.0.6'
+SA_VERSION='1.0.7'
 
 # ---------- 环境 ----------
 
