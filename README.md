@@ -19,7 +19,7 @@
 - **断点续传**：安装包下载支持断点续传与自动重连；Git 归档有恢复检查点
 - **并发保护**：交互菜单与批量操作互斥加锁，防止多实例写坏档案数据
 - **双格式索引**：`资源索引.tsv`（纯 bash、机器可读）+ `资源索引.xlsx`；`-Action List` 可将 TSV 清单输出到 stdout
-- **纯 bash 实现**：兼容 macOS 自带的 bash 3.2，除 Git 外零依赖；自带 40 项单元测试（`Work/Tests/run-tests.sh`）
+- **纯 bash 实现**：兼容 macOS 自带的 bash 3.2，除 Git 外零依赖；自带 43 项单元测试（`Work/Tests/run-tests.sh`）
 
 ## 界面预览
 

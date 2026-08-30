@@ -1167,12 +1167,13 @@ verify_sa_bundles() { # software_path
     # git bundle verify 要求在 git 仓库内执行（校验前置依赖是否存在）。
     # 优先用软件自己的 mirror；无 mirror（如云端恢复后）时用临时空仓库——
     # 工具生成的 bundle 都包含完整历史、无前置依赖，同样能完成校验。
-    mirror="$REPOS_DIR/$(basename "$p").git"
-    vrepo="$TEMP_DIR/bundle-verify.git"
+    local mirror='' vrepo=''
+    [ -n "${REPOS_DIR:-}" ] && mirror="$REPOS_DIR/$(basename "$p").git"
+    [ -n "${TEMP_DIR:-}" ] && vrepo="$TEMP_DIR/bundle-verify.git"
     for f in "$p/Source/"*.bundle; do
         [ -f "$f" ] || continue
         BV_COUNT=$((BV_COUNT + 1))
-        if [ -d "$mirror" ]; then
+        if [ -n "$mirror" ] && [ -d "$mirror" ]; then
             out=$(git -C "$mirror" bundle verify "$f" 2>&1)
         else
             [ -d "$vrepo" ] || git init -q --bare "$vrepo" 2>/dev/null
