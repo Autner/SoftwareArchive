@@ -613,6 +613,33 @@ size_text_of() { # bytes
     fi
 }
 
+# 分多轮选择并归档本地安装包：每轮可在系统文件选择框内多选（Command 点选），
+# 不同文件夹的安装包可分多轮添加，MAP_* 累计。
+# 返回 0=完成（至少完成一轮）；1=第一轮就未选择任何文件（调用方应中止本次操作）。
+select_and_add_packages() { # stage version preferred... → MAP_*（累计）
+    local stage=$1 version=$2; shift 2
+    local round=0
+    while :; do
+        round=$((round + 1))
+        select_local_files '选择安装包'
+        if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then
+            if [ "$round" = '1' ]; then return 1; fi
+            break
+        fi
+        if ! add_local_packages "$stage" "$version" "$@"; then return 1; fi
+        [ -n "$AP_CANCELLED" ] && return 1
+        SELECT_TITLE='继续添加安装包？'
+        SELECT_OPTIONS=('继续添加更多安装包' '完成，进入下一步')
+        SELECT_DEFAULT_INDEX=1
+        SELECT_HELP=('系统文件选择框内按住 Command 点选可一次添加多个；' \
+                     "不同文件夹的安装包可分多轮添加。本次已归档 ${#MAP_NAMES[@]} 个安装包。")
+        SELECT_ALLOW_CANCEL=1
+        select_one
+        [ "$SELECT_RESULT" = '0' ] || break
+    done
+    return 0
+}
+
 select_release_asset_mappings() { # 使用 ASSET_* 与 preferred... → MAP_* SAM_CANCELLED
     local -a preferred=("$@")
     local n=${#ASSET_NAMES[@]}
@@ -1009,17 +1036,12 @@ new_software_body() { # policy source_url name → 0 完成 / 1 取消或失败�
     fi
 
     if [ "$policy" = 'Fixed' ]; then
-        select_local_files '选择 Fixed 安装包'
-        if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then
-            remove_sa_task "$TASK_TASKPATH" "$TASK_ID"
-            return 1
-        fi
         MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
-        if ! add_local_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
-            [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
+        if ! select_and_add_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
+            remove_sa_task "$TASK_TASKPATH" "$TASK_ID"
+            SA_ERROR_MSG=''
             return 1
         fi
-        [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
     else
         while [ "$lookup_state" = 'Pending' ]; do
             show_header '查询最新 Release' "正在查询：$source_url"
@@ -1089,31 +1111,15 @@ new_software_body() { # policy source_url name → 0 完成 / 1 取消或失败�
                 remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1
             fi
             if [ "$SELECT_RESULT" = '1' ]; then
-                select_local_files '选择安装包'
-                if [ -n "$FILES_CANCELLED" ]; then
+                MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
+                if ! select_and_add_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
                     remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1
-                fi
-                if [ ${#FILES[@]} -gt 0 ]; then
-                    MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
-                    if ! add_local_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
-                        [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
-                        return 1
-                    fi
-                    [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
                 fi
             fi
         elif [ "$lookup_state" = 'ManualPackages' ]; then
-            select_local_files '选择安装包'
-            if [ -n "$FILES_CANCELLED" ]; then
+            MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
+            if ! select_and_add_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
                 remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1
-            fi
-            if [ ${#FILES[@]} -gt 0 ]; then
-                MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
-                if ! add_local_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
-                    [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
-                    return 1
-                fi
-                [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
             fi
         fi
         TASK_STATUS='InProgress'
@@ -1184,8 +1190,6 @@ start_fixed_update() { # record_index
     read_value
     [ -n "$RV_CANCELLED" ] && return 0
     local newver=$RV_VALUE
-    select_local_files '选择新版本安装包'
-    if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then return 0; fi
     new_sa_task 'UpdateFixed' "$INFO_NAME"
     if ! fixed_update_body "$newver" "$ri"; then
         [ -n "$SA_ERROR_MSG" ] && show_task_failure
@@ -1204,11 +1208,10 @@ fixed_update_body() { # new_version record_index
         return 1
     fi
     MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
-    if ! add_local_packages "$TASK_STAGEPATH" "$newver" ${preferred[@]+"${preferred[@]}"}; then
-        [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
+    if ! select_and_add_packages "$TASK_STAGEPATH" "$newver" ${preferred[@]+"${preferred[@]}"}; then
+        remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''
         return 1
     fi
-    [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
     read_info_yaml "$TASK_STAGEPATH/info.yml" >/dev/null 2>&1
     INFO_VERSION=$newver
     INFO_LASTCHECKED=$(today_str)
@@ -1495,17 +1498,11 @@ change_policy_body() { # record_index target
         INFO_POLICY='Fixed'
         if [ "$from_policy" = 'Record' ]; then
             # Record 没有 Packages：转 Fixed 时需要现场选择安装包。
-            select_local_files '选择 Fixed 安装包'
-            if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then
+            MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
+            if ! select_and_add_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
                 remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''
                 return 1
             fi
-            MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
-            if ! add_local_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
-                [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
-                return 1
-            fi
-            [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
         fi
     fi
     [ -f "$TASK_STAGEPATH/使用手册.md" ] || \
