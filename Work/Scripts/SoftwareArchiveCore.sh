@@ -989,6 +989,9 @@ checksum_targets() { # software_path → 每行一个相对路径（正斜杠）
     for root in "${roots[@]}"; do
         [ -d "$root" ] || continue
         while IFS= read -r f; do
+            # 跳过 macOS 访达元数据：用户用访达打开目录就会生成 .DS_Store，
+            # 不跳过会一直误报 Unlisted
+            case "$(basename "$f")" in .DS_Store) continue ;; esac
             found+=("${f#"$p"/}")
         done < <(find "$root" -type f 2>/dev/null)
     done

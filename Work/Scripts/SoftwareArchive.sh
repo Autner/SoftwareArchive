@@ -2346,7 +2346,8 @@ case $ACTION in
             fi
             test_sa_checksums "${REC_DIRS[$i]}"
             verify_sa_bundles "${REC_DIRS[$i]}"
-            local line="${REC_NAMES[$i]}：${CK_MESSAGE}"
+            # 注意：此处位于顶层 case 块而非函数内，不能用 local
+            line="${REC_NAMES[$i]}：${CK_MESSAGE}"
             [ -n "$BV_MESSAGE" ] && line+="（${BV_MESSAGE}）"
             printf '%s\n' "$line"
             [ "$CK_PASSED" = '1' ] || failed=$((failed + 1))
