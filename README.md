@@ -50,10 +50,35 @@
 ```sh
 git clone https://github.com/Autner/SoftwareArchive.git
 cd SoftwareArchive
-bash Work/Scripts/Init.sh     # 首次初始化
+bash Work/Scripts/Init.sh     # 首次初始化：补建目录、配置、索引，并设置执行权限
 ```
 
-之后双击 `启动软件档案管理.command` 打开主菜单。
+之后日常使用：在访达中**双击 `启动软件档案管理.command`** 打开主菜单；或在终端运行 `bash Work/Scripts/SoftwareArchive.sh`。
+
+> macOS 需要 Git（Maintain 功能）：未安装时在终端运行 `xcode-select --install` 安装 Xcode Command Line Tools 即可；其余功能零依赖。
+
+**双击 .command 提示"无法验证开发者"怎么办**：从网络传输的文件会被 macOS 隔离标记。任选其一：
+
+```sh
+# 方法一：解除整个文件夹的隔离标记（推荐）
+xattr -dr com.apple.quarantine /path/to/SoftwareArchive
+```
+
+或方法二：在访达中右键点 .command 文件 → 打开 → 再点"打开"。
+
+## 数据备份
+
+长期备份以下内容即可（其余目录均可重建，无需上传）：
+
+```text
+SoftwareArchive/
+├── Library/          # 全部软件档案（最重要）
+└── Work/
+    ├── Scripts/      # 工具源码（也可随时从 GitHub 重新获取）
+    └── Config/       # 全局配置
+```
+
+`Work/Repositories`（Git 镜像）、`Work/Downloads`、`Work/Temp`、`outputs/` 均为可再生的缓存/导出，无需备份。
 
 ## 目录结构
 
@@ -69,7 +94,7 @@ SoftwareArchive/
 └── 启动软件档案管理.command
 ```
 
-详细工作流程见 [Library/资源库管理说明.md](Library/资源库管理说明.md)，快速上手见 [README_先读我.md](README_先读我.md)。
+详细工作流程与规则见 [Library/资源库管理说明.md](Library/资源库管理说明.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 从源码打包 macOS 应用
 

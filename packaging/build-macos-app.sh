@@ -18,7 +18,7 @@ rm -rf "$STAGE"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$SA/Work/Scripts" "$SA/Work/Config" "$SA/Library"
 
 # 1) 装入工具本体（源码 + 配置 + 文档，不含任何已收录软件数据）
-cp "$ROOT/README_先读我.md" "$ROOT/VERSION.txt" "$ROOT/启动软件档案管理.command" "$SA/"
+cp "$ROOT/README.md" "$ROOT/VERSION.txt" "$ROOT/启动软件档案管理.command" "$SA/"
 cp "$ROOT/Work/Scripts/"*.sh "$SA/Work/Scripts/"
 cp "$ROOT/Work/Config/config.yml" "$SA/Work/Config/"
 cp "$ROOT/Library/资源库管理说明.md" "$SA/Library/"
