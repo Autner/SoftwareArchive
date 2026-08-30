@@ -2177,7 +2177,9 @@ case $ACTION in
             fi
             test_sa_checksums "${REC_DIRS[$i]}"
             verify_sa_bundles "${REC_DIRS[$i]}"
-            printf '%s\n' "${REC_NAMES[$i]}：${CK_MESSAGE}（${BV_MESSAGE}）"
+            local line="${REC_NAMES[$i]}：${CK_MESSAGE}"
+            [ -n "$BV_MESSAGE" ] && line+="（${BV_MESSAGE}）"
+            printf '%s\n' "$line"
             [ "$CK_PASSED" = '1' ] || failed=$((failed + 1))
             [ "$BV_COUNT" -gt 0 ] && [ "$BV_OK" != "$BV_COUNT" ] && failed=$((failed + 1))
         done
