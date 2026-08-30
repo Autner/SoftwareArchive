@@ -331,6 +331,11 @@ validate_new_name() {
 
 validate_url() { test_web_url "$1"; }
 
+validate_optional_url() { # Record 的官网地址允许留空
+    [ -z "$1" ] && return 0
+    test_web_url "$1"
+}
+
 validate_file_exists() {
     [ -n "$1" ] || return 0
     [ -f "$1" ] || printf '%s\n' '文件不存在，请检查路径。'
@@ -695,7 +700,13 @@ move_old_packages() { # stage newversion → 0 继续 / 1 返回
 
 show_info_summary() { # 使用 INFO_*（或向导变量） → 单行数组
     local ver url tags lic notes
-    ver=$INFO_VERSION; [ -n "$ver" ] || ver='留空（Packages 使用 Unknown）'
+    ver=$INFO_VERSION
+    if [ -z "$ver" ]; then
+        case $INFO_POLICY in
+            Record) ver='留空（仅记录，不跟踪版本）' ;;
+            *) ver='留空（Packages 使用 Unknown）' ;;
+        esac
+    fi
     url=$INFO_SOURCE_URL; [ -n "$url" ] || url='未填写'
     if [ ${#INFO_TAGS[@]} -gt 0 ]; then tags=$(join_str ' / ' ${INFO_TAGS[@]+"${INFO_TAGS[@]}"}); else tags='无'; fi
     lic=$INFO_LICENSE; [ -n "$lic" ] || lic='未填写'
@@ -803,14 +814,20 @@ start_new_software() {
         case $wizard_step in
             0)
                 SELECT_TITLE='收录新软件'
-                SELECT_OPTIONS=('Fixed：保存确定版本的安装包' 'Maintain：持续跟踪 Release 与 Git 源码')
+                SELECT_OPTIONS=('Fixed：保存确定版本的安装包' 'Maintain：持续跟踪 Release 与 Git 源码' 'Record：仅记录，不保存安装包和源码')
                 SELECT_DEFAULT_INDEX=$policy_index
-                SELECT_HELP=()
+                SELECT_HELP=('Fixed：手动收录安装包，不查询更新。'
+                             'Maintain：自动查询 Release，并归档 Git 源码。'
+                             'Record：只记一条备忘（如商业软件），恢复环境时提醒自己重新下载。')
                 SELECT_ALLOW_CANCEL=1
                 select_one
                 [ "$SELECT_RESULT" -lt 0 ] && return 0
                 policy_index=$SELECT_RESULT
-                [ "$policy_index" = '0' ] && policy='Fixed' || policy='Maintain'
+                case $policy_index in
+                    0) policy='Fixed' ;;
+                    1) policy='Maintain' ;;
+                    2) policy='Record' ;;
+                esac
                 wizard_step=1
                 ;;
             1)
@@ -825,11 +842,17 @@ start_new_software() {
                 select_platforms ${platforms[@]+"${platforms[@]}"}
                 [ -n "$SP_CANCELLED" ] && { wizard_step=1; continue; }
                 platforms=(${SP_RESULT[@]+"${SP_RESULT[@]}"})
-                if [ "$policy" = 'Maintain' ]; then wizard_step=3; else wizard_step=4; fi
+                if [ "$policy" = 'Fixed' ]; then wizard_step=4; else wizard_step=3; fi
                 ;;
             3)
-                RV_TITLE='源码仓库地址'; RV_PROMPT='source_url'; RV_EXAMPLE='https://github.com/owner/project'
-                RV_DEFAULT=$source_url; RV_ALLOW_EMPTY=''; RV_VALIDATOR='validate_url'; RV_HELP=()
+                if [ "$policy" = 'Record' ]; then
+                    RV_TITLE='官网 / 下载页地址（可选）'; RV_PROMPT='source_url'; RV_EXAMPLE='https://www.example.com/product'
+                    RV_DEFAULT=$source_url; RV_ALLOW_EMPTY=1; RV_VALIDATOR='validate_optional_url'
+                    RV_HELP=('Record 建议填写官网或下载页，恢复环境时方便快速定位；没有可留空。')
+                else
+                    RV_TITLE='源码仓库地址'; RV_PROMPT='source_url'; RV_EXAMPLE='https://github.com/owner/project'
+                    RV_DEFAULT=$source_url; RV_ALLOW_EMPTY=''; RV_VALIDATOR='validate_url'; RV_HELP=()
+                fi
                 read_value
                 [ -n "$RV_CANCELLED" ] && { wizard_step=2; continue; }
                 source_url=$RV_VALUE
@@ -838,7 +861,7 @@ start_new_software() {
             4)
                 get_optional_metadata
                 if [ -n "$OM_CANCELLED" ]; then
-                    if [ "$policy" = 'Maintain' ]; then wizard_step=3; else wizard_step=2; fi
+                    if [ "$policy" = 'Fixed' ]; then wizard_step=2; else wizard_step=3; fi
                     continue
                 fi
                 om_version=$OM_VERSION; om_tags=(${OM_TAGS[@]+"${OM_TAGS[@]}"})
@@ -857,8 +880,13 @@ start_new_software() {
                 INFO_LASTCHECKED=$(today_str)
                 INFO_NOTES=$om_notes
                 show_info_summary
-                SELECT_TITLE='确认创建入库任务'
-                SELECT_OPTIONS=('确认并继续' '返回修改可选信息' '取消本次入库')
+                local confirm_title='确认创建入库任务' confirm_label='确认并继续'
+                if [ "$policy" = 'Record' ]; then
+                    confirm_title='确认收录（Record，仅记录）'
+                    confirm_label='确认并写入档案库'
+                fi
+                SELECT_TITLE="$confirm_title"
+                SELECT_OPTIONS=("$confirm_label" '返回修改可选信息' '取消本次入库')
                 SELECT_DEFAULT_INDEX=0
                 SELECT_HELP=("${SUMMARY_LINES[@]}")
                 SELECT_ALLOW_CANCEL=1
@@ -871,6 +899,31 @@ start_new_software() {
         esac
     done
 
+    if [ "$policy" = 'Record' ]; then
+        # Record 不走暂存任务：条目只有 info.yml，直接写入正式库并重建索引。
+        local rdir="$LIBRARY_DIR/$INFO_NAME"
+        if ! mkdir -p "$rdir" 2>/dev/null; then
+            show_header '收录失败' "无法创建目录：$rdir"
+            wait_for_user
+            return 0
+        fi
+        if ! write_info_yaml "$rdir/info.yml"; then
+            show_header '收录失败' "无法写入：$rdir/info.yml"
+            wait_for_user
+            return 0
+        fi
+        rebuild_index_tsv >/dev/null 2>&1
+        new_sa_index_workbook >/dev/null 2>&1
+        show_header '收录完成' \
+            "软件：$INFO_NAME（Record，仅记录）" \
+            "目录：$rdir" \
+            '' \
+            '该条目只保存 info.yml，不占用安装包和源码空间。' \
+            '如需记录下载入口、账号要求或许可证信息，可手动在该目录补充 使用手册.md。' \
+            '云端备份：上传新的 资源索引.xlsx，并同步该软件目录（只有 info.yml）。'
+        wait_for_user
+        return 0
+    fi
     new_sa_task "New$policy" "$INFO_NAME"
     if ! new_software_body "$policy" "$source_url" "$INFO_NAME"; then
         [ -n "$SA_ERROR_MSG" ] && show_task_failure
@@ -1220,6 +1273,12 @@ start_update_software() {
     case $INFO_POLICY in
         Fixed) start_fixed_update "$SR_INDEX" ;;
         Maintain) start_maintain_update "$SR_INDEX" ;;
+        Record)
+            show_header 'Record 条目无需更新' \
+                '记录型软件不保存安装包与源码，没有可更新的资源。' \
+                '修改名称、平台、备注等信息：直接编辑该软件的 info.yml，然后在主菜单重建资源索引。' \
+                '开始保存资源：使用「修改更新策略」转为 Fixed 或 Maintain。'
+            wait_for_user ;;
         *) show_header '无法更新' 'info.yml 中的 update_policy 无效。'; wait_for_user ;;
     esac
 }
@@ -1234,11 +1293,38 @@ start_change_policy() {
         show_header '无法修改' 'info.yml 读取失败，请先修复。'; wait_for_user; return 0
     fi
     case $INFO_POLICY in
-        Fixed|Maintain) : ;;
+        Fixed|Maintain|Record) : ;;
         *) show_header '无法修改' '当前 update_policy 无效，请先修复 info.yml。'; wait_for_user; return 0 ;;
     esac
     local target
-    if [ "$INFO_POLICY" = 'Fixed' ]; then target='Maintain'; else target='Fixed'; fi
+    local -a topts=() thelp=()
+    case $INFO_POLICY in
+        Fixed)
+            topts=('Maintain：持续跟踪 Release 与 Git 源码')
+            thelp=('将为该软件建立 Git mirror 并生成源码 bundle；现有安装包全部保留。')
+            ;;
+        Maintain)
+            topts=('Fixed：保存确定版本的安装包')
+            thelp=('停止 Release 自动查询；现有 Source/*.bundle 与来源信息全部保留。')
+            ;;
+        Record)
+            topts=('Fixed：开始保存确定版本的安装包' 'Maintain：开始跟踪 Release 与 Git 源码')
+            thelp=("当前：$INFO_NAME（Record，仅记录）"
+                   '转换后按目标策略补齐安装包或源码，现有信息全部保留。')
+            ;;
+    esac
+    SELECT_TITLE='选择目标更新策略'
+    SELECT_OPTIONS=("${topts[@]}")
+    SELECT_DEFAULT_INDEX=0
+    SELECT_HELP=(${thelp[@]+"${thelp[@]}"})
+    SELECT_ALLOW_CANCEL=1
+    select_one
+    [ "$SELECT_RESULT" -lt 0 ] && return 0
+    if [ "$INFO_POLICY" = 'Fixed' ]; then target='Maintain'
+    elif [ "$INFO_POLICY" = 'Maintain' ]; then target='Fixed'
+    elif [ "$SELECT_RESULT" = '0' ]; then target='Fixed'
+    else target='Maintain'
+    fi
     CA_TITLE='确认修改更新策略'
     CA_DETAILS=("$INFO_NAME：$INFO_POLICY → $target")
     CA_DEFAULT_NO=''
@@ -1252,9 +1338,10 @@ start_change_policy() {
 }
 
 change_policy_body() { # record_index target
-    local ri=$1 target=$2
+    local ri=$1 target=$2 from_policy
     copy_software_to_task "${REC_DIRS[$ri]}" || return 1
     read_info_yaml "$TASK_STAGEPATH/info.yml" >/dev/null 2>&1 || return 1
+    from_policy=$INFO_POLICY
     if [ "$target" = 'Maintain' ]; then
         RV_TITLE='设置源码仓库地址'; RV_PROMPT='source_url'; RV_EXAMPLE='https://github.com/owner/project'
         RV_DEFAULT=$INFO_SOURCE_URL; RV_ALLOW_EMPTY=''; RV_VALIDATOR='validate_url'; RV_HELP=()
@@ -1277,7 +1364,23 @@ change_policy_body() { # record_index target
         new_git_bundle "$mirror" "$TASK_STAGEPATH/Source/$INFO_NAME.bundle" || return 1
     else
         INFO_POLICY='Fixed'
+        if [ "$from_policy" = 'Record' ]; then
+            # Record 没有 Packages：转 Fixed 时需要现场选择安装包。
+            select_local_files '选择 Fixed 安装包'
+            if [ -n "$FILES_CANCELLED" ] || [ ${#FILES[@]} -eq 0 ]; then
+                remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''
+                return 1
+            fi
+            MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
+            if ! add_local_packages "$TASK_STAGEPATH" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}; then
+                [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
+                return 1
+            fi
+            [ -n "$AP_CANCELLED" ] && { remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1; }
+        fi
     fi
+    [ -f "$TASK_STAGEPATH/使用手册.md" ] || \
+        new_user_manual "$TASK_STAGEPATH/使用手册.md" "$INFO_NAME" "$INFO_VERSION" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}
     INFO_LASTCHECKED=$(today_str)
     write_info_yaml "$TASK_STAGEPATH/info.yml"
     new_sa_checksums "$TASK_STAGEPATH" >/dev/null
@@ -1382,6 +1485,11 @@ start_verify_resources() {
     local allpass=1 r status pathpart expected actual symbol color
     for r in "${targets[@]}"; do
         printf '%s\n' "${WHITE}${REC_NAMES[$r]}${NONE}"
+        if sa_skip_checksum_verify "${REC_DIRS[$r]}"; then
+            printf '%s\n' "${GRAY}  Record（仅记录）：无校验文件，跳过。${NONE}"
+            printf '\n'
+            continue
+        fi
         test_sa_checksums "${REC_DIRS[$r]}"
         for item in ${CK_RESULTS[@]+"${CK_RESULTS[@]}"}; do
             status=${item%%|*}
@@ -1889,7 +1997,10 @@ start_export_entry() {
             show_header '导出失败' 'zip 打包出错。' ; wait_for_user; return 0;
         }
     else
-        (cd "$LIBRARY_DIR" && zip -q -r "$dest" "$name" -i "$name/info.yml" "$name/使用手册.md" "$name/checksums.sha256") || {
+        local -a inc=("$name/info.yml")
+        [ -f "$LIBRARY_DIR/$name/使用手册.md" ] && inc+=("$name/使用手册.md")
+        [ -f "$LIBRARY_DIR/$name/checksums.sha256" ] && inc+=("$name/checksums.sha256")
+        (cd "$LIBRARY_DIR" && zip -q -r "$dest" "$name" -i ${inc[@]+"${inc[@]}"}) || {
             show_header '导出失败' 'zip 打包出错。' ; wait_for_user; return 0;
         }
     fi
@@ -1933,6 +2044,13 @@ start_import_entry() {
     mkdir -p "$LIBRARY_DIR"
     mv "$(dirname "$info")" "$target"
     rm -rf "$stage"
+    if [ "$INFO_POLICY" = 'Record' ]; then
+        rebuild_index_tsv >/dev/null 2>&1
+        new_sa_index_workbook >/dev/null 2>&1
+        show_header '导入完成' "$name 已加入档案库（Record，仅记录，无需使用手册）。"
+        wait_for_user
+        return 0
+    fi
     if [ ! -f "$target/使用手册.md" ]; then
         new_user_manual "$target/使用手册.md" "$name" "${INFO_VERSION:-}" ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}
     fi
@@ -1950,18 +2068,20 @@ start_main_menu() {
     fi
     trap 'sa_lock_release' EXIT
     invoke_recovery_prompt
-    local choice records_count maintain_count pending_count deprecated_count i
+    local choice records_count maintain_count record_count pending_count deprecated_count i
     local -a options
     while :; do
         get_software_records
         records_count=${#REC_NAMES[@]}
         pending_count=${#TASKS_IDS[@]}
         maintain_count=0
+        record_count=0
         deprecated_count=0
         for ((i = 0; i < records_count; i++)); do
             if [ "${REC_VALID[$i]}" = '1' ]; then
                 read_info_yaml "${REC_DIRS[$i]}/info.yml" >/dev/null 2>&1
                 [ "$INFO_POLICY" = 'Maintain' ] && maintain_count=$((maintain_count + 1))
+                [ "$INFO_POLICY" = 'Record' ] && record_count=$((record_count + 1))
                 [ "${INFO_STATUS:-active}" != 'active' ] && deprecated_count=$((deprecated_count + 1))
             fi
         done
@@ -1985,7 +2105,7 @@ start_main_menu() {
         SELECT_TITLE="SoftwareArchive $SA_VERSION 软件档案管理"
         SELECT_OPTIONS=("${options[@]}")
         SELECT_DEFAULT_INDEX=0
-        SELECT_HELP=("已收录：$records_count 个；Maintain：$maintain_count 个；失效/迁移：$deprecated_count 个；未完成任务：$pending_count 个"
+        SELECT_HELP=("已收录：$records_count 个；Maintain：$maintain_count 个；仅记录：$record_count 个；失效/迁移：$deprecated_count 个；未完成任务：$pending_count 个"
                      '方向键选择，重要操作会在提交前再次确认。')
         SELECT_ALLOW_CANCEL=''
         select_one
@@ -2051,6 +2171,10 @@ case $ACTION in
         failed=0
         get_software_records
         for ((i = 0; i < ${#REC_NAMES[@]}; i++)); do
+            if sa_skip_checksum_verify "${REC_DIRS[$i]}"; then
+                printf '%s\n' "${REC_NAMES[$i]}：Record（仅记录，跳过校验）"
+                continue
+            fi
             test_sa_checksums "${REC_DIRS[$i]}"
             verify_sa_bundles "${REC_DIRS[$i]}"
             printf '%s\n' "${REC_NAMES[$i]}：$CK_MESSAGE（$BV_MESSAGE）"

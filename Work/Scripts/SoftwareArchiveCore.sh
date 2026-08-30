@@ -1024,6 +1024,12 @@ test_sa_checksums() { # software_path
     return 0
 }
 
+# Record（仅记录）条目没有安装包、源码和校验文件，完整性校验直接跳过
+sa_skip_checksum_verify() { # software_path → 0 跳过 / 1 不跳过
+    read_info_yaml "$1/info.yml" >/dev/null 2>&1 || return 1
+    [ "$INFO_POLICY" = 'Record' ]
+}
+
 # ---------- 资源索引.xlsx ----------
 
 xml_escape() {

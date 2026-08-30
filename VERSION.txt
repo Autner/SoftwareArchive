@@ -1,3 +1,3 @@
-SoftwareArchive 1.0.0 (macOS)
+SoftwareArchive 1.1.0 (macOS)
 
 Release date: 2026-08-30

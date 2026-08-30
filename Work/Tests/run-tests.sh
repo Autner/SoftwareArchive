@@ -2,7 +2,7 @@
 # SoftwareArchive 单元测试（纯 bash，无第三方依赖）
 # 用法：bash Work/Tests/run-tests.sh
 # 覆盖：YAML 解析/生成、路径解析、文本工具、锁、TSV 索引、
-#       搜索匹配、记录列表、状态字段、bundle 校验桩
+#       搜索匹配、记录列表、状态字段、Record（仅记录）类型、bundle 校验桩
 set -u
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")/../Scripts" && pwd)
@@ -55,6 +55,8 @@ fixture_entry() { # dir name version policy notes status tags...
 fixture_entry "$LIBRARY_DIR/Alpha" 'Alpha' 'v1.0' 'Maintain' '流程图工具' 'active' '学习工具'
 fixture_entry "$LIBRARY_DIR/Beta' v2" "Beta v2" 'v2.0' 'Fixed' '清理工具' 'deprecated' '实用工具'
 fixture_entry "$LIBRARY_DIR/Gamma" 'Gamma' '' 'Fixed' '备注含关键词 思维导图' 'active'
+# Record 条目：没有 checksums.sha256，版本留空
+fixture_entry "$LIBRARY_DIR/Delta" 'Delta' '' 'Record' '商业软件备忘' 'active' '效率工具'
 
 # ---------- 1. 版本单一来源 ----------
 
@@ -92,9 +94,9 @@ assert_eq 'trim 去空白' 'abc' "$(trim '   abc   ')"
 
 printf '%s\n' '[4] get_software_records'
 get_software_records
-assert_eq '记录数（目录名排序）' 3 ${#REC_NAMES[@]}
+assert_eq '记录数（目录名排序）' 4 ${#REC_NAMES[@]}
 assert_eq '首条为 Alpha' 'Alpha' "${REC_NAMES[0]}"
-assert_eq '全部有效' 1 "${REC_VALID[2]}"
+assert_eq '全部有效' 1 "${REC_VALID[3]}"
 
 # ---------- 5. 搜索匹配 ----------
 
@@ -104,6 +106,8 @@ assert_rc '按备注命中（中文）' 0 $(record_matches_query '流程图' "$L
 assert_rc '手册全文命中' 0 $(record_matches_query '思维导图' "$LIBRARY_DIR/Gamma/" && echo 0 || echo 1)
 assert_rc '不匹配时返回 1' 1 $(record_matches_query '不存在的东西' "$LIBRARY_DIR/Alpha/" && echo 0 || echo 1)
 assert_rc '空关键字返回 1' 1 $(record_matches_query '' "$LIBRARY_DIR/Alpha/" && echo 0 || echo 1)
+assert_rc '按策略命中 record' 0 $(record_matches_query 'record' "$LIBRARY_DIR/Delta/" && echo 0 || echo 1)
+assert_rc '非 Record 条目不按策略命中' 1 $(record_matches_query 'record' "$LIBRARY_DIR/Alpha/" && echo 0 || echo 1)
 
 # ---------- 6. TSV 索引 ----------
 
@@ -111,8 +115,10 @@ printf '%s\n' '[6] TSV 索引'
 INDEX_TSV_FILE="$TESTROOT/资源索引.tsv"
 rebuild_index_tsv
 assert_rc 'TSV 文件生成' 0 $( [ -f "$INDEX_TSV_FILE" ] && echo 0 || echo 1)
-assert_eq 'TSV 行数 = 表头 + 3 条' 4 "$(wc -l < "$INDEX_TSV_FILE" | tr -d ' ')"
+assert_eq 'TSV 行数 = 表头 + 4 条' 5 "$(wc -l < "$INDEX_TSV_FILE" | tr -d ' ')"
 assert_rc 'TSV 含状态列数据（deprecated）' 0 $(grep -q 'deprecated' "$INDEX_TSV_FILE" && echo 0 || echo 1)
+assert_rc 'TSV 收录 Record 条目（版本列为空）' 0 \
+    $(awk -F'\t' '$1=="Delta" && $2=="" && $4=="Record" && $5=="active"' "$INDEX_TSV_FILE" | grep -q . && echo 0 || echo 1)
 
 # ---------- 7. 并发锁 ----------
 
@@ -150,6 +156,20 @@ assert_rc '校验通过' 1 "$CK_PASSED"
 printf '%s  a.bin\n' "0000000000000000000000000000000000000000000000000000000000000000" > "$TESTROOT/CK/checksums.sha256"
 test_sa_checksums "$TESTROOT/CK"
 assert_rc '篡改被检出' 0 "$CK_PASSED"
+
+# ---------- 10. Record（仅记录）类型 ----------
+
+printf '%s\n' '[10] Record 类型'
+assert_rc 'Record 条目跳过完整性校验' 0 $(sa_skip_checksum_verify "$LIBRARY_DIR/Delta" && echo 0 || echo 1)
+assert_rc 'Fixed 条目不跳过完整性校验' 1 $(sa_skip_checksum_verify "$LIBRARY_DIR/Gamma" && echo 0 || echo 1)
+assert_rc '无效条目不跳过完整性校验' 1 $(sa_skip_checksum_verify "$TESTROOT/CK" && echo 0 || echo 1)
+INFO_NAME='Echo'; INFO_POLICY='Record'; INFO_VERSION=''
+INFO_PLATFORMS=('macOS'); INFO_TAGS=(); INFO_SOURCE_URL=''; INFO_SOURCE_TYPE=''
+INFO_LICENSE=''; INFO_STATUS='active'; INFO_LASTCHECKED='2026-08-30'; INFO_NOTES=''
+write_info_yaml "$TESTROOT/record.yml"
+read_info_yaml "$TESTROOT/record.yml"
+assert_eq 'Record 策略写入并读回' 'Record' "$INFO_POLICY"
+assert_eq 'Record 版本保持为空' '' "$INFO_VERSION"
 
 # ---------- 汇总 ----------
 
