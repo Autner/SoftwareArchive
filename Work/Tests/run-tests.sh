@@ -144,6 +144,21 @@ mkdir -p "$TESTROOT/BP/Source"
 assert_eq '无 bundle 时 count=0' 0 "$(verify_sa_bundles "$TESTROOT/BP"; echo $BV_COUNT)"
 assert_eq '无 bundle 提示' '无 bundle' "$(verify_sa_bundles "$TESTROOT/BP"; echo $BV_MESSAGE)"
 
+if command -v git >/dev/null 2>&1; then
+    mkdir -p "$TESTROOT/src_repo" "$TESTROOT/BP2/Source"
+    git -C "$TESTROOT/src_repo" init -q
+    git -C "$TESTROOT/src_repo" -c user.email=t@t -c user.name=t commit --allow-empty -q -m init
+    git -C "$TESTROOT/src_repo" bundle create "$TESTROOT/BP2/Source/x.bundle" --all 2>/dev/null
+    REPOS_DIR="$TESTROOT/Repositories"
+    TEMP_DIR="$TESTROOT/Temp"
+    verify_sa_bundles "$TESTROOT/BP2"
+    assert_rc '无 mirror 时完整 bundle 校验通过' 1 "$BV_OK"
+    assert_eq '校验计数' 1 "$BV_COUNT"
+    printf 'broken' > "$TESTROOT/BP2/Source/x.bundle"
+    verify_sa_bundles "$TESTROOT/BP2"
+    assert_rc '损坏 bundle 被检出' 0 "$BV_OK"
+fi
+
 # ---------- 9. 校验和（正常路径） ----------
 
 printf '%s\n' '[9] test_sa_checksums'

@@ -915,7 +915,7 @@ start_new_software() {
         rebuild_index_tsv >/dev/null 2>&1
         new_sa_index_workbook >/dev/null 2>&1
         show_header '收录完成' \
-            "软件：$INFO_NAME（Record，仅记录）" \
+            "软件：${INFO_NAME}（Record，仅记录）" \
             "目录：$rdir" \
             '' \
             '该条目只保存 info.yml，不占用安装包和源码空间。' \
@@ -1309,7 +1309,7 @@ start_change_policy() {
             ;;
         Record)
             topts=('Fixed：开始保存确定版本的安装包' 'Maintain：开始跟踪 Release 与 Git 源码')
-            thelp=("当前：$INFO_NAME（Record，仅记录）"
+            thelp=("当前：${INFO_NAME}（Record，仅记录）"
                    '转换后按目标策略补齐安装包或源码，现有信息全部保留。')
             ;;
     esac
@@ -1399,14 +1399,14 @@ start_delete_software() {
     get_sa_software_footprint "$name" "$dir"
     local -a details=()
     if [ -n "$FP_LIBRARY" ]; then
-        details+=("Library 目录：$FP_LIBRARY（$(get_sa_size_text "$FP_LIBRARY")）")
+        details+=("Library 目录：${FP_LIBRARY}（$(get_sa_size_text "$FP_LIBRARY")）")
     else
         details+=('Library 目录：不存在')
     fi
     local m
     if [ ${#FP_MIRRORS[@]} -gt 0 ]; then
         for m in "${FP_MIRRORS[@]}"; do
-            details+=("Git mirror：$m（$(get_sa_size_text "$m")）")
+            details+=("Git mirror：${m}（$(get_sa_size_text "$m")）")
         done
     else
         details+=('Git mirror：不存在')
@@ -1845,7 +1845,7 @@ start_check_all_updates() {
         cur=${INFO_VERSION:-未记录}
         latest=${RELEASE_TAG:-未知}
         if [ "$latest" = "$cur" ]; then
-            same+=("${REC_NAMES[$ri]}：已是最新（$cur）")
+            same+=("${REC_NAMES[$ri]}：已是最新（${cur}）")
         else
             upd+=("${REC_NAMES[$ri]}：$cur → $latest")
             idx_upd+=("$ri")
@@ -2164,7 +2164,7 @@ case $ACTION in
         if new_sa_index_workbook; then
             printf '%s\n' "资源索引已生成：$INDEX_FILE"
         else
-            printf '%s\n' "提示：$SA_ERROR_MSG（TSV 索引不受影响）" >&2
+            printf '%s\n' "提示：${SA_ERROR_MSG}（TSV 索引不受影响）" >&2
         fi
         ;;
     Verify)
@@ -2177,7 +2177,7 @@ case $ACTION in
             fi
             test_sa_checksums "${REC_DIRS[$i]}"
             verify_sa_bundles "${REC_DIRS[$i]}"
-            printf '%s\n' "${REC_NAMES[$i]}：$CK_MESSAGE（$BV_MESSAGE）"
+            printf '%s\n' "${REC_NAMES[$i]}：${CK_MESSAGE}（${BV_MESSAGE}）"
             [ "$CK_PASSED" = '1' ] || failed=$((failed + 1))
             [ "$BV_COUNT" -gt 0 ] && [ "$BV_OK" != "$BV_COUNT" ] && failed=$((failed + 1))
         done

@@ -846,7 +846,7 @@ git_checked() { # args...（自动附加系统代理环境）
     out=$(env "${env_args[@]}" git "$@" 2>&1)
     rc=$?
     if [ $rc -ne 0 ]; then
-        sa_set_error "Git 命令执行失败（退出码 $rc）。
+        sa_set_error "Git 命令执行失败（退出码 ${rc}）。
 $out"
         return 1
     fi
@@ -1162,12 +1162,22 @@ rebuild_index_tsv() { # 写入 $LIBRARY_DIR/资源索引.tsv
 # 结果：BV_COUNT BV_OK BV_MESSAGE
 verify_sa_bundles() { # software_path
     BV_COUNT=0; BV_OK=0; BV_MESSAGE=''
-    local p=$1 f out
+    local p=$1 f out mirror vrepo
     [ -d "$p/Source" ] || return 0
+    # git bundle verify 要求在 git 仓库内执行（校验前置依赖是否存在）。
+    # 优先用软件自己的 mirror；无 mirror（如云端恢复后）时用临时空仓库——
+    # 工具生成的 bundle 都包含完整历史、无前置依赖，同样能完成校验。
+    mirror="$REPOS_DIR/$(basename "$p").git"
+    vrepo="$TEMP_DIR/bundle-verify.git"
     for f in "$p/Source/"*.bundle; do
         [ -f "$f" ] || continue
         BV_COUNT=$((BV_COUNT + 1))
-        out=$(git bundle verify "$f" 2>&1)
+        if [ -d "$mirror" ]; then
+            out=$(git -C "$mirror" bundle verify "$f" 2>&1)
+        else
+            [ -d "$vrepo" ] || git init -q --bare "$vrepo" 2>/dev/null
+            out=$(git -C "$vrepo" bundle verify "$f" 2>&1)
+        fi
         if [ $? -eq 0 ]; then BV_OK=$((BV_OK + 1)); fi
     done
     if [ "$BV_COUNT" -eq 0 ]; then
