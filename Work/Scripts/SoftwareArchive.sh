@@ -793,7 +793,9 @@ complete_manual_step() { # task_existing(1/0) → 0 提交成功 / 1 暂存退�
         SELECT_TITLE='使用手册确认'
         SELECT_OPTIONS=("${opts[@]}")
         SELECT_DEFAULT_INDEX=0
-        SELECT_HELP=("软件：$TASK_SOFTWARENAME" '该环节需要人工处理，确认后才会写入正式资源库。')
+        SELECT_HELP=("软件：$TASK_SOFTWARENAME" \
+                     "新版本已在暂存区就绪，但尚未写入正式资源库。" \
+                     '确认前正式库仍保持旧版本；此环节需要人工确认。')
         SELECT_ALLOW_CANCEL=1
         select_one
         choice=$SELECT_RESULT
@@ -801,7 +803,10 @@ complete_manual_step() { # task_existing(1/0) → 0 提交成功 / 1 暂存退�
             TASK_STATUS='WaitingManual'
             TASK_STEP='ManualPending'
             save_sa_task
-            show_header '任务已暂存' '下次启动脚本时可以继续。' "任务目录：$TASK_TASKPATH"
+            show_header '任务已暂存' \
+                '正式资源库仍是旧版本——直到你下次继续本任务并完成使用手册确认。' \
+                '下次启动脚本时会自动提示继续；选择“我已完成使用手册”后才会正式生效。' \
+                "任务目录：$TASK_TASKPATH"
             wait_for_user
             return 1
         fi
