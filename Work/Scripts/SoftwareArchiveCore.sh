@@ -494,7 +494,8 @@ detect_system_proxy() {
 }
 
 sa_proxy_env() { # 输出 "http_proxy=.. https_proxy=.."（空则输出空）
-    [ -n "$PROXY_URL" ] || return 0
+    # ${PROXY_URL:-}：set -u 环境下未初始化时不报错
+    [ -n "${PROXY_URL:-}" ] || return 0
     printf 'http_proxy=%s https_proxy=%s all_proxy=%s' "$PROXY_URL" "$PROXY_URL" "$PROXY_URL"
 }
 
@@ -853,6 +854,46 @@ $out"
     return 0
 }
 
+# 长耗时 git 命令（克隆/更新镜像/生成 bundle）：后台执行并实时显示进度或用时。
+# 直接用 git_checked 会在命令替换里静默等待，大仓库克隆看起来像卡死。
+# GIT_TERMINAL_PROMPT=0 禁止 git 隐式弹出终端凭据提示（缺凭据时快速失败并给出明确错误）。
+git_checked_progress() { # label args...
+    local label=$1; shift
+    require_git || return 1
+    local outfile="$TEMP_DIR/git-progress.$$"
+    local -a env_args=()
+    local pe
+    pe=$(sa_proxy_env)
+    [ -n "$pe" ] && env_args=($pe)
+    : > "$outfile"
+    # 注意：bash 3.2 + set -u 下空数组的 "${env_args[@]}" 会视为未绑定变量，
+    # 必须用 ${env_args[@]+...} 防护（与本项目其他数组展开写法一致）。
+    env ${env_args[@]+"${env_args[@]}"} GIT_TERMINAL_PROMPT=0 git "$@" > "$outfile" 2>&1 &
+    local pid=$! start=$(date +%s) rc last=''
+    if [ -t 1 ]; then
+        printf '%s' "$label"
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+            last=$(tr '\r' '\n' < "$outfile" 2>/dev/null | grep -v '^$' | tail -n 1)
+            if [ -n "$last" ]; then
+                printf '\r\033[2K%s  %s' "$label" "$last"
+            else
+                printf '\r\033[2K%s（已用时 %s）' "$label" "$(elapsed_text $(( $(date +%s) - start )))"
+            fi
+        done
+        printf '\r\033[2K'
+    fi
+    wait "$pid"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        local out
+        out=$(tr '\r' '\n' < "$outfile" 2>/dev/null | grep -v '^$' | tail -n 5)
+        sa_set_error "Git 命令执行失败（退出码 ${rc}）。
+$out"
+    fi
+    rm -f "$outfile"
+    [ "$rc" -eq 0 ] && return 0 || return 1
+}
+
 update_git_mirror() { # software_name source_url → stdout mirror 路径
     require_git || return 1
     local name=$1 url=$2
@@ -865,11 +906,11 @@ update_git_mirror() { # software_name source_url → stdout mirror 路径
     fi
     if [ -d "$mirror" ]; then
         git_checked -C "$mirror" remote set-url origin "$clone_url" || return 1
-        git_checked -C "$mirror" remote update --prune || return 1
+        git_checked_progress '更新 Git 镜像' -C "$mirror" remote update --prune || return 1
     else
         local partial="$mirror.partial"
         rm -rf "$partial"
-        if git_checked clone --mirror "$clone_url" "$partial"; then
+        if git_checked_progress '克隆 Git 仓库（首次镜像）' clone --mirror --progress "$clone_url" "$partial"; then
             mv "$partial" "$mirror" || { rm -rf "$partial"; return 1; }
         else
             rm -rf "$partial"
@@ -883,7 +924,8 @@ new_git_bundle() { # mirror_path bundle_path
     local mirror=$1 bundle=$2 partial="$2.partial"
     mkdir -p "$(dirname "$bundle")" || return 1
     rm -f "$partial"
-    git_checked -C "$mirror" bundle create "$partial" --all || { rm -f "$partial"; return 1; }
+    # 注意：macOS 自带 git 的 bundle create 不接受 --progress，只显示用时
+    git_checked_progress '生成源码 bundle' -C "$mirror" bundle create "$partial" --all || { rm -f "$partial"; return 1; }
     git_checked -C "$mirror" bundle verify "$partial" || { rm -f "$partial"; return 1; }
     mv -f "$partial" "$bundle"
 }

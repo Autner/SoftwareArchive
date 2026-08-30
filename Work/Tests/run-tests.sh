@@ -186,6 +186,21 @@ read_info_yaml "$TESTROOT/record.yml"
 assert_eq 'Record 策略写入并读回' 'Record' "$INFO_POLICY"
 assert_eq 'Record 版本保持为空' '' "$INFO_VERSION"
 
+# ---------- 11. git 进度执行器 ----------
+
+printf '%s\n' '[11] git_checked_progress'
+if command -v git >/dev/null 2>&1; then
+    git_checked_progress '测试' -C "$TESTROOT/src_repo" status > /dev/null 2>&1
+    assert_rc '成功路径返回 0' 0 $?
+    git_checked_progress '测试' -C "$TESTROOT/src_repo" definitely-not-a-subcommand > /dev/null 2>&1
+    assert_rc '失败路径返回 1' 1 $?
+    case $SA_ERROR_MSG in
+        'Git 命令执行失败'*) t_ok '失败时写入错误信息' ;;
+        *) t_fail "失败时写入错误信息（实际 [$SA_ERROR_MSG]）" ;;
+    esac
+    SA_ERROR_MSG=''
+fi
+
 # ---------- 汇总 ----------
 
 printf '\n'
