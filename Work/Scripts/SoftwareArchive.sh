@@ -901,7 +901,10 @@ start_new_software() {
 
     if [ "$policy" = 'Record' ]; then
         # Record 不走暂存任务：条目只有 info.yml，直接写入正式库并重建索引。
-        local rdir="$LIBRARY_DIR/$INFO_NAME"
+        # 重建索引会重新扫描全部条目并覆盖 INFO_* 全局变量，
+        # 因此软件名和目录必须先捕获到局部变量再重建。
+        local rname=$INFO_NAME
+        local rdir="$LIBRARY_DIR/$rname"
         if ! mkdir -p "$rdir" 2>/dev/null; then
             show_header '收录失败' "无法创建目录：$rdir"
             wait_for_user
@@ -915,7 +918,7 @@ start_new_software() {
         rebuild_index_tsv >/dev/null 2>&1
         new_sa_index_workbook >/dev/null 2>&1
         show_header '收录完成' \
-            "软件：${INFO_NAME}（Record，仅记录）" \
+            "软件：${rname}（Record，仅记录）" \
             "目录：$rdir" \
             '' \
             '该条目只保存 info.yml，不占用安装包和源码空间。' \
