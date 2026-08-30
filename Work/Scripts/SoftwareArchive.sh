@@ -1401,7 +1401,10 @@ change_policy_body() { # record_index target
 start_delete_software() {
     select_software_record '选择需要彻底删除的软件'
     [ -n "$SR_CANCELLED" ] && return 0
-    local ri=$SR_INDEX name=${REC_NAMES[$ri]} dir=${REC_DIRS[$ri]}
+    # 注意：不能写成 local ri=... name=${REC_NAMES[$ri]} —— 同一行 local 的
+    # 多个赋值先整体展开再执行，$ri 当时还是空值，空下标会取到第 0 条。
+    local ri=$SR_INDEX
+    local name=${REC_NAMES[$ri]} dir=${REC_DIRS[$ri]}
     get_sa_software_footprint "$name" "$dir"
     local -a details=()
     if [ -n "$FP_LIBRARY" ]; then
