@@ -31,7 +31,7 @@ fi
 INDEX_FILE="$LIBRARY_DIR/资源索引.xlsx"
 sa_init_environment
 
-trap 'if [ -n "${SA_ACTIVE_DOWNLOAD_PID:-}" ]; then kill "$SA_ACTIVE_DOWNLOAD_PID" 2>/dev/null; wait "$SA_ACTIVE_DOWNLOAD_PID" 2>/dev/null; SA_ACTIVE_DOWNLOAD_PID=""; fi; printf "\n%s\n" "已中断。"; exit 130' INT
+trap 'if [ -n "${SA_ACTIVE_DOWNLOAD_PID:-}" ]; then kill "$SA_ACTIVE_DOWNLOAD_PID" 2>/dev/null; wait "$SA_ACTIVE_DOWNLOAD_PID" 2>/dev/null; SA_ACTIVE_DOWNLOAD_PID=""; fi; printf "\n%s\n" "${GRAY}已中断。${NONE}"; exit 130' INT
 
 # ---------- 颜色与基础 UI ----------
 
@@ -217,9 +217,12 @@ draw_console_text() { # prompt buffer cursor
         first=${right:0:1}
         if [ ${#right} -gt 1 ]; then rest=${right:1}; fi
     fi
-    printf '\r\033[2K%s：%s' "$prompt" "$left"
+    # 输入行显式着色：不依赖终端默认文字色（黑底+黑字配置下默认色不可见）。
+    # 灰色 (37) 在浅色与深色背景下均可读；反色光标块不改变前景色，
+    # 光标右侧文字自动继承灰色，最后统一 NONE 复位。
+    printf '\r\033[2K%s：%s' "${GRAY}${prompt}" "$left"
     # 保存光标后再输出右半段，恢复时无需自行计算中文字符的显示宽度。
-    printf '\033[s\033[7m%s\033[27m%s\033[K\033[u' "$first" "$rest"
+    printf '\033[s\033[7m%s\033[27m%s\033[K\033[u%s' "$first" "$rest" "${NONE}"
 }
 
 read_console_text() { # prompt [initial] → RCT_VALUE RCT_CANCELLED
@@ -229,8 +232,8 @@ read_console_text() { # prompt [initial] → RCT_VALUE RCT_CANCELLED
     while :; do
         read_key
         case $KEY in
-            ESC) printf '\r\033[2K%s：%s\n' "$prompt" "$buf"; RCT_CANCELLED=1; RCT_VALUE=''; return 0 ;;
-            ENTER) printf '\r\033[2K%s：%s\n' "$prompt" "$buf"; RCT_CANCELLED=''; RCT_VALUE=$buf; return 0 ;;
+            ESC) printf '\r\033[2K%s：%s\n' "${GRAY}${prompt}" "${buf}${NONE}"; RCT_CANCELLED=1; RCT_VALUE=''; return 0 ;;
+            ENTER) printf '\r\033[2K%s：%s\n' "${GRAY}${prompt}" "${buf}${NONE}"; RCT_CANCELLED=''; RCT_VALUE=$buf; return 0 ;;
             LEFT)
                 if [ "$cursor" -gt 0 ]; then cursor=$((cursor - 1)); draw_console_text "$prompt" "$buf" "$cursor"; fi
                 ;;
