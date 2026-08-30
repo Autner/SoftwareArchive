@@ -64,7 +64,12 @@ wait_for_user() {
 
 read_key() {
     local k k2 k3 k4 next code needed i
-    IFS= read -rsn1 k
+    # stdin 关闭（EOF）时必须干净退出：否则上层菜单循环会立即重绘并再次
+    # 读取，以 100% CPU 无限空转（曾导致失控进程持续发热数小时）。
+    if ! IFS= read -rsn1 k; then
+        printf '\n%s\n' '输入已结束，程序退出。'
+        exit 130
+    fi
     KEY=''
     if [ "$k" = $'\033' ]; then
         KEY=ESC
