@@ -122,25 +122,64 @@ read_key() {
 
 select_one() {
     # SELECT_TITLE SELECT_OPTIONS[] SELECT_DEFAULT_INDEX SELECT_HELP[] SELECT_ALLOW_CANCEL → SELECT_RESULT
+    # 选项超过终端高度时启用视口滚动：只渲染可见范围，选中项始终保持在屏幕内。
     local n=${#SELECT_OPTIONS[@]}
     [ "$n" -eq 0 ] && { SELECT_RESULT=-1; return 0; }
     local pos=$SELECT_DEFAULT_INDEX
     [ "$pos" -lt 0 ] && pos=0
     [ "$pos" -ge "$n" ] && pos=$((n - 1))
     local i marker color footer
+    # 屏幕高度（tput 不可用或非终端时按 24 行处理）
+    local term_h
+    term_h=$(tput lines 2>/dev/null)
+    case $term_h in ''|*[!0-9]*) term_h=24 ;; esac
+    [ "$term_h" -lt 10 ] && term_h=10
+    # 帮助文本拆成实际显示行（元素可能内嵌换行），超长时截断，保证下方仍有选项空间
+    local -a help_lines=()
+    local h el
+    for el in ${SELECT_HELP[@]+"${SELECT_HELP[@]}"}; do
+        while IFS= read -r h; do help_lines+=("$h"); done < <(printf '%s\n' "$el")
+    done
+    local maxhelp=$((term_h - 9))
+    [ "$maxhelp" -lt 2 ] && maxhelp=2
+    local help_omitted=0
+    if [ ${#help_lines[@]} -gt "$maxhelp" ]; then
+        help_omitted=$(( ${#help_lines[@]} - maxhelp ))
+        help_lines=("${help_lines[@]:0:maxhelp}")
+    fi
+    # 视口预算：标题 3 行 + 页脚前空行 1 + 页脚 1 + 上下指示各预留，共 8 行
+    local viewport=$((term_h - 8 - ${#help_lines[@]}))
+    [ "$viewport" -lt 3 ] && viewport=3
+    [ "$viewport" -gt "$n" ] && viewport=$n
+    local top=0 end above below
+    if [ "$pos" -ge "$viewport" ]; then top=$((pos - viewport + 1)); fi
     while :; do
-        if [ ${#SELECT_HELP[@]} -gt 0 ]; then
-            show_header "$SELECT_TITLE" "${SELECT_HELP[@]}"
-        else
-            show_header "$SELECT_TITLE"
-        fi
-        for ((i = 0; i < n; i++)); do
+        # 平移视口，保证选中项可见
+        if [ "$pos" -lt "$top" ]; then top=$pos; fi
+        if [ "$pos" -ge $((top + viewport)) ]; then top=$((pos - viewport + 1)); fi
+        end=$((top + viewport))
+        [ "$end" -gt "$n" ] && end=$n
+        sa_clear
+        printf '%s\n' "${DARK}============================================================${NONE}"
+        printf '%s\n' "${CYAN}  ${SELECT_TITLE}${NONE}"
+        printf '%s\n' "${DARK}============================================================${NONE}"
+        for h in "${help_lines[@]}"; do
+            if [ -n "$h" ]; then printf '%s\n' "${GRAY}${h}${NONE}"; else printf '\n'; fi
+        done
+        [ "$help_omitted" -gt 0 ] && printf '%s\n' "${DARK}…… 其余 $help_omitted 行帮助文本省略${NONE}"
+        printf '\n'
+        above=$top
+        below=$((n - end))
+        [ "$above" -gt 0 ] && printf '%s\n' "${DARK}  ↑ 向上还有 $above 项${NONE}"
+        for ((i = top; i < end; i++)); do
             if [ "$i" = "$pos" ]; then marker='>'; color=$YELLOW; else marker=' '; color=$GRAY; fi
             printf '%s\n' "${color} ${marker} ${SELECT_OPTIONS[$i]}${NONE}"
         done
+        [ "$below" -gt 0 ] && printf '%s\n' "${DARK}  ↓ 向下还有 $below 项${NONE}"
         printf '\n'
         footer='↑↓ 移动  Enter 确认'
         [ -n "$SELECT_ALLOW_CANCEL" ] && footer="$footer  Esc 返回"
+        [ $((above + below)) -gt 0 ] && footer="$footer  （列表可滚动）"
         printf '%s\n' "${DARK}${footer}${NONE}"
         read_key
         case $KEY in
