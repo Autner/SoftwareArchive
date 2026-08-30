@@ -63,6 +63,18 @@ wait_for_user() {
 }
 
 read_key() {
+    # 有按键助手时（交互终端 + perl 可用）：从管道读已解析的 token，
+    # 单独按 Esc 约 40ms 内返回；无助手时回退到 bash 原生读取（Esc 约延迟 1 秒）。
+    if [ -n "${SA_KEY_FD:-}" ]; then
+        if ! IFS= read -r KEY <&"$SA_KEY_FD"; then
+            printf '\n%s\n' '输入已结束，程序退出。'
+            exit 130
+        fi
+        [ -n "$KEY" ] && return 0
+        # 助手不会输出空行；防御性忽略后再读
+        KEY=''
+        return 0
+    fi
     local k k2 k3 k4 next code needed i
     # stdin 关闭（EOF）时必须干净退出：否则上层菜单循环会立即重绘并再次
     # 读取，以 100% CPU 无限空转（曾导致失控进程持续发热数小时）。
@@ -1857,6 +1869,47 @@ invoke_recovery_prompt() {
     done
 }
 
+# ---------- 按键助手（消除 bash 3.2 下单独按 Esc 的 1 秒延迟） ----------
+
+SA_KEY_FD=''
+SA_KEY_HELPER_PID=''
+
+sa_key_helper_start() {
+    [ -t 0 ] || return 0
+    command -v perl >/dev/null 2>&1 || return 0
+    [ -f "$SELF_DIR/sa-keys.pl" ] || return 0
+    KEY_FIFO="$TEMP_DIR/keys.$$"
+    rm -f "$KEY_FIFO"
+    mkfifo "$KEY_FIFO" 2>/dev/null || return 0
+    # 注意：后台任务的 stdin 会被 shell 自动重定向到 /dev/null，
+    # 必须显式 <&0 把终端绑定给助手，否则它立即读到 EOF 退出。
+    perl "$SELF_DIR/sa-keys.pl" <&0 > "$KEY_FIFO" 2>/dev/null &
+    SA_KEY_HELPER_PID=$!
+    # 打开读端（阻塞到助手打开写端为止）；之后删除路径不影响已打开的 fd
+    if ! eval "exec 6< \"\$KEY_FIFO\"" 2>/dev/null; then
+        kill "$SA_KEY_HELPER_PID" 2>/dev/null
+        SA_KEY_HELPER_PID=''
+        rm -f "$KEY_FIFO"
+        return 0
+    fi
+    SA_KEY_FD=6
+    rm -f "$KEY_FIFO"
+    return 0
+}
+
+sa_key_helper_stop() {
+    if [ -n "$SA_KEY_HELPER_PID" ]; then
+        kill "$SA_KEY_HELPER_PID" 2>/dev/null
+        wait "$SA_KEY_HELPER_PID" 2>/dev/null
+        SA_KEY_HELPER_PID=''
+    fi
+    if [ -n "$SA_KEY_FD" ]; then
+        eval "exec $SA_KEY_FD<&-" 2>/dev/null
+        SA_KEY_FD=''
+    fi
+    return 0
+}
+
 # ---------- 主菜单 ----------
 
 guard() { # fn...
@@ -2181,7 +2234,8 @@ start_main_menu() {
         wait_for_user
         return 0
     fi
-    trap 'sa_lock_release' EXIT
+    trap 'sa_lock_release; sa_key_helper_stop' EXIT
+    sa_key_helper_start
     invoke_recovery_prompt
     local choice records_count maintain_count record_count pending_count deprecated_count i
     local -a options
@@ -2246,7 +2300,7 @@ start_main_menu() {
                 show_header '初始化完成' 'Repositories、Downloads、Temp、Config 和索引已经检查。'
                 wait_for_user
                 ;;
-            16) sa_lock_release; trap - EXIT; return 0 ;;
+            16) sa_lock_release; sa_key_helper_stop; trap - EXIT; return 0 ;;
         esac
     done
 }

@@ -19,7 +19,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$SA/Work/Scripts" "$SA
 
 # 1) 装入工具本体（源码 + 配置 + 文档，不含任何已收录软件数据）
 cp "$ROOT/README.md" "$ROOT/VERSION.txt" "$ROOT/启动软件档案管理.command" "$SA/"
-cp "$ROOT/Work/Scripts/"*.sh "$SA/Work/Scripts/"
+cp "$ROOT/Work/Scripts/"*.sh "$ROOT/Work/Scripts/"*.pl "$SA/Work/Scripts/"
 cp "$ROOT/Work/Config/config.yml" "$SA/Work/Config/"
 cp "$ROOT/Library/资源库管理说明.md" "$SA/Library/"
 chmod +x "$SA/Work/Scripts/"*.sh "$SA/启动软件档案管理.command"
