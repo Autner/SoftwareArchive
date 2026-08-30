@@ -1382,6 +1382,67 @@ start_change_policy() {
     fi
 }
 
+# Record → Maintain：查询最新 Release 并可选下载对应平台的安装包，
+# 使转换后的条目与直接收录的 Maintain 保持一致（都有安装包 + 源码归档）。
+# 选择并映射了文件时走 ReleaseDownloadPending 检查点，下载中断可断点恢复。
+sa_change_release_step() { # → 0 继续（无论是否下载）/ 1 取消转换或下载失败
+    local lookup='Pending' rc
+    while [ "$lookup" = 'Pending' ]; do
+        show_header '查询最新 Release' "正在查询：$INFO_SOURCE_URL"
+        get_latest_release "$INFO_SOURCE_URL"
+        rc=$?
+        if [ $rc -eq 0 ]; then lookup='Found'
+        elif [ $rc -eq 1 ]; then lookup='None'
+        else
+            SELECT_TITLE='Release 查询失败'
+            SELECT_OPTIONS=('重试查询' '跳过安装包，仅归档源码' '取消转换')
+            SELECT_DEFAULT_INDEX=0
+            SELECT_HELP=("$SA_ERROR_MSG")
+            SELECT_ALLOW_CANCEL=1
+            select_one
+            case $SELECT_RESULT in
+                0) : ;;
+                1) lookup='Skip'; SA_ERROR_MSG='' ;;
+                *) remove_sa_task "$TASK_TASKPATH" "$TASK_ID"; SA_ERROR_MSG=''; return 1 ;;
+            esac
+        fi
+    done
+    if [ "$lookup" = 'None' ]; then
+        show_header '未发现正式 Release' \
+            '该仓库当前没有正式 Release，转换后将只包含源码归档。' \
+            '以后可在「更新已有软件」中补下载安装包。'
+        wait_for_user
+        return 0
+    fi
+    [ "$lookup" = 'Skip' ] && return 0
+    local decided=0 choice
+    while [ "$decided" = '0' ]; do
+        SELECT_TITLE='选择 Release 安装包'
+        SELECT_OPTIONS=("下载 $RELEASE_TAG 的安装包" '跳过，仅归档源码')
+        SELECT_DEFAULT_INDEX=0
+        SELECT_HELP=("版本：$RELEASE_TAG" "发布时间：$(format_release_time "$RELEASE_PUBLISHED")" '转换时一并下载安装包，与直接收录的 Maintain 软件保持一致。')
+        SELECT_ALLOW_CANCEL=1
+        select_one
+        choice=$SELECT_RESULT
+        if [ "$choice" = '1' ]; then return 0; fi
+        [ "$choice" -lt 0 ] && continue
+        MAP_PLATFORMS=(); MAP_NAMES=(); MAP_URLS=(); MAP_SIZES=()
+        select_release_asset_mappings ${INFO_PLATFORMS[@]+"${INFO_PLATFORMS[@]}"}
+        [ -n "$SAM_CANCELLED" ] && continue
+        decided=1
+    done
+    [ ${#MAP_NAMES[@]} -eq 0 ] && return 0
+    INFO_VERSION=$RELEASE_TAG
+    TASK_STATUS='InProgress'
+    TASK_STEP='ReleaseDownloadPending'
+    ctx_write_info "$TASK_TASKPATH"
+    ctx_write_release "$TASK_TASKPATH"
+    ctx_write_mappings "$TASK_TASKPATH"
+    save_sa_task
+    add_release_packages "$TASK_STAGEPATH" || return 1
+    return 0
+}
+
 change_policy_body() { # record_index target
     local ri=$1 target=$2 from_policy
     copy_software_to_task "${REC_DIRS[$ri]}" || return 1
@@ -1398,6 +1459,7 @@ change_policy_body() { # record_index target
         INFO_SOURCE_URL=$RV_VALUE
         INFO_SOURCE_TYPE=$(get_source_type "$INFO_SOURCE_URL")
         INFO_POLICY='Maintain'
+        if [ "$from_policy" = 'Record' ] && ! sa_change_release_step; then return 1; fi
         mkdir -p "$TASK_STAGEPATH/Source"
         TASK_STATUS='InProgress'
         TASK_STEP='GitArchivePending'
